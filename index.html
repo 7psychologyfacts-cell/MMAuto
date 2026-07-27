@@ -394,6 +394,21 @@
 
   <div class="tab-panel active" id="tab-generate">
 
+  <!-- 0. Generation Mode -->
+  <section class="panel" style="margin-bottom:18px;">
+    <div class="panel-header">
+      <h3><svg class="icon"><use href="#icon-activity"></use></svg> Generation Mode</h3>
+      <span class="badge" id="docModeBadge">Per-Case</span>
+    </div>
+    <div class="segmented" role="tablist" style="margin-bottom:10px;">
+      <input type="radio" id="docModePerCase" name="docGenMode" value="per-case" checked onchange="switchDocMode('per-case')">
+      <label for="docModePerCase">Per-Case Document</label>
+      <input type="radio" id="docModeCompany" name="docGenMode" value="company" onchange="switchDocMode('company')">
+      <label for="docModeCompany">Company-wise Document</label>
+    </div>
+    <p class="hint" id="docModeHint">One document per row/case — the current default behaviour (e.g. 1000 cases → 1000 documents, zipped).</p>
+  </section>
+
   <!-- 1. File Upload Area -->
   <section class="upload-section">
     <label class="upload-card" for="excelFileInput" style="cursor:pointer;" id="excelUploadCard">
@@ -466,9 +481,70 @@
     <div class="doc-preview" id="docPreview"><p class="hint">Nothing to preview yet.</p></div>
   </section>
 
+  <!-- 3b. Company-wise Document Settings (visible only in Company-wise mode) -->
+  <section class="panel" id="docCompanyModePanel" style="display:none;margin-bottom:18px;">
+    <div class="panel-header">
+      <h3><svg class="icon"><use href="#icon-link"></use></svg> Company-wise Grouping</h3>
+      <span class="badge" id="docGroupBadge">0 groups</span>
+    </div>
+
+    <label class="field-label">Group cases by column(s)</label>
+    <p class="hint" style="margin-top:0;">Pick one column (e.g. Insurance Company) or several together (e.g. Company + Aging Bucket) — each unique combination becomes its own set of documents.</p>
+    <div class="mapping-scroll-container" id="docGroupFieldsPicker" style="max-height:140px;margin-bottom:14px;"></div>
+
+    <div class="field-grid">
+      <div>
+        <label class="field-label" for="docAmountColumn">Amount column (optional, for {{Total_...}} tag)</label>
+        <select id="docAmountColumn" class="text-input" onchange="onDocGroupingConfigChange()">
+          <option value="">None</option>
+        </select>
+      </div>
+      <div>
+        <label class="field-label" for="docRecipientField">Recipient email column (optional, for {{Company_Email}} tag)</label>
+        <select id="docRecipientField" class="text-input" onchange="onDocGroupingConfigChange()">
+          <option value="">None</option>
+        </select>
+      </div>
+    </div>
+
+    <label class="field-label">Documents to generate per group</label>
+    <label class="checkbox-row">
+      <input type="checkbox" id="docAttachLetter" onchange="onDocGroupingConfigChange()">
+      <span>Merged Letter Document (.docx) — your uploaded Word template, filled with group totals ({{Case_Count}}, {{Total_...}}, group columns)</span>
+    </label>
+    <label class="checkbox-row" style="margin-top:8px;">
+      <input type="checkbox" id="docAttachTable" checked onchange="onDocGroupingConfigChange()">
+      <span>Summary Table Document (.docx) — one aligned table listing every case in that group</span>
+    </label>
+    <label class="checkbox-row" style="margin-top:8px;">
+      <input type="checkbox" id="docAttachExcel" checked onchange="onDocGroupingConfigChange()">
+      <span>Filtered Excel (.xlsx) — only that group's rows</span>
+    </label>
+    <label class="checkbox-row" style="margin-top:8px;">
+      <input type="checkbox" id="docAttachZip" onchange="onDocGroupingConfigChange()">
+      <span>Individual case documents, zipped (.zip) — one .docx per case within that group</span>
+    </label>
+    <p class="hint" id="docLetterZipHint" style="margin:6px 0 14px;"></p>
+
+    <div id="docTableColumnsWrap">
+      <label class="field-label">Columns to include in the Summary Table Document</label>
+      <div class="mapping-scroll-container" id="docTableColumnsPicker" style="max-height:140px;margin-bottom:16px;"></div>
+    </div>
+
+    <div class="panel-header" style="margin-top:4px;">
+      <h3 style="font-size:13px;">Groups Preview</h3>
+    </div>
+    <div class="table-scroll-container" style="max-height:220px;">
+      <table>
+        <thead><tr><th>Group</th><th>Cases</th><th id="docAmountColHeader" style="display:none;">Total Amount</th></tr></thead>
+        <tbody id="docGroupsBody"></tbody>
+      </table>
+    </div>
+  </section>
+
   <!-- 4. Action Buttons -->
   <section class="action-section">
-    <div class="format-picker">
+    <div class="format-picker" id="perCaseFilenameRow">
       <span>Name generated files using</span>
       <select id="filenameField" class="text-input" style="max-width:220px;"></select>
     </div>
@@ -794,6 +870,14 @@ let tableColumns = [];           // selected columns for the Summary Table Docum
 let companyGroups = [];          // computed groups for company-wise mode: {key, rows, recipient, recipientConsistent, totalAmount}
 let selectedGroupKey = null;     // currently selected group (Send Test Email / highlight)
 
+let columnTypes = {};            // { excelColumnName: 'number' | 'date' | 'text' } — from /api/upload-data
+
+let docMode = 'per-case';        // 'per-case' | 'company' — Document Generation tab
+let docGroupFields = [];         // one or more excel columns to group by (e.g. Company + Aging)
+let docAmountField = null;       // optional excel column used for {{Total_<col>}} tag
+let docTableColumns = [];        // selected columns for the Summary Table Document
+let docGroups = [];              // computed groups: {key, keyParts, rows}
+
 const BATCH_SIZE = 1;        // 1 row per /api/send-emails call, so Sent/Failed/progress update LIVE after every single email instead of waiting for a whole batch
 
 /* ==========================================================================
@@ -861,6 +945,7 @@ async function handleExcelUpload(file){
 
     excelData = data.rows;
     columns = data.columns;
+    columnTypes = data.column_types || {};
 
     document.getElementById("excelFileMeta").textContent = `${columns.length} columns · ${data.row_count} rows`;
     document.getElementById("excelFileStatus").style.display = "inline-flex";
@@ -882,6 +967,15 @@ async function handleExcelUpload(file){
       renderTableColumnsPicker();
       recomputeCompanyGroups();
       renderMoreTagOptions();
+    }
+
+    if (docMode === 'company'){
+      renderDocGroupFieldsPicker();
+      renderDocAmountColumnOptions();
+      renderDocRecipientFieldOptions();
+      docTableColumns = [];
+      renderDocTableColumnsPicker();
+      recomputeDocGroups();
     }
 
     showToast(`Loaded ${data.row_count} rows from ${file.name}.`);
@@ -991,6 +1085,17 @@ function onMappingChange(tag, col){
 }
 
 function refreshMappingAndPreviewState(){
+  if (docMode === 'company'){
+    const ready = excelData.length > 0;
+    document.getElementById("generateBtn").disabled = !ready;
+    document.getElementById("generateBtn").style.opacity = ready ? "1" : ".55";
+    document.getElementById("generateBtnLabel").textContent = ready && docGroups.length
+      ? `Generate Documents for ${docGroups.length} Group(s)`
+      : "Generate Group Documents";
+    if (ready && templateTags.length) renderPreview(selectedRowIndex);
+    return;
+  }
+
   const ready = templateTags.length > 0 && excelData.length > 0;
   document.getElementById("generateBtn").disabled = !ready;
   document.getElementById("generateBtn").style.opacity = ready ? "1" : ".55";
@@ -1036,8 +1141,16 @@ function renderPreview(idx){
    4. Generate documents (ZIP download)
    ========================================================================== */
 async function generateDocuments(){
-  if (!templateB64 || !excelData.length){
-    showToast("Upload both a spreadsheet and a template first.");
+  if (!excelData.length){
+    showToast("Upload a spreadsheet first.");
+    return;
+  }
+  if (docMode === 'company'){
+    await generateCompanyDocuments();
+    return;
+  }
+  if (!templateB64){
+    showToast("Upload a Word template first.");
     return;
   }
   const btn = document.getElementById("generateBtn");
@@ -1047,11 +1160,209 @@ async function generateDocuments(){
 
   try {
     await downloadFilePost("/api/generate", {
+      mode: "per-case",
       template_b64: templateB64,
       mapping: mapping,
       rows: excelData,
+      column_types: columnTypes,
       filename_field: document.getElementById("filenameField").value
     }, "merged_documents.zip");
+    showToast("ZIP file download started.");
+  } catch (e) {
+    showToast(e.message);
+  } finally {
+    btn.disabled = false;
+    btn.style.opacity = "1";
+  }
+}
+
+/* ==========================================================================
+   Document Generation tab — Company-wise / multi-field group-wise mode
+   ========================================================================== */
+function switchDocMode(mode){
+  docMode = mode;
+
+  document.getElementById("docModeBadge").textContent = mode === 'company' ? 'Company-wise' : 'Per-Case';
+  document.getElementById("docModeHint").textContent = mode === 'company'
+    ? "One set of documents per GROUP — e.g. 1000 cases across 10 companies produces 10 (not 1000) documents. Select one or more columns below to group by."
+    : "One document per row/case — the current default behaviour (e.g. 1000 cases → 1000 documents, zipped).";
+  document.getElementById("docCompanyModePanel").style.display = mode === 'company' ? 'block' : 'none';
+  document.getElementById("perCaseFilenameRow").style.display = mode === 'company' ? 'none' : 'flex';
+
+  if (mode === 'company' && excelData.length){
+    renderDocGroupFieldsPicker();
+    renderDocAmountColumnOptions();
+    renderDocRecipientFieldOptions();
+    if (!docTableColumns.length) docTableColumns = [...columns];
+    renderDocTableColumnsPicker();
+    recomputeDocGroups();
+  }
+  refreshMappingAndPreviewState();
+}
+
+function renderDocGroupFieldsPicker(){
+  const wrap = document.getElementById("docGroupFieldsPicker");
+  if (!docGroupFields.length){
+    const guess = columns.find(c => /company|insur|payer|tpa/i.test(c));
+    if (guess) docGroupFields = [guess];
+  }
+  wrap.innerHTML = columns.map(col => `
+    <label class="checkbox-row" style="margin-bottom:6px;">
+      <input type="checkbox" value="${escapeHtml(col)}" ${docGroupFields.includes(col) ? 'checked' : ''} onchange="onDocGroupFieldToggle('${col.replace(/'/g,"\\'")}', this.checked)">
+      <span>${escapeHtml(col)}</span>
+    </label>
+  `).join('');
+}
+
+function onDocGroupFieldToggle(col, checked){
+  if (checked && !docGroupFields.includes(col)) docGroupFields.push(col);
+  if (!checked) docGroupFields = docGroupFields.filter(c => c !== col);
+  onDocGroupingConfigChange();
+}
+
+function renderDocAmountColumnOptions(){
+  const sel = document.getElementById("docAmountColumn");
+  const guess = columns.find(c => /amount|amt|claim|bill|due|balance/i.test(c)) || "";
+  sel.innerHTML = '<option value="">None</option>' +
+    columns.map(col => `<option value="${escapeHtml(col)}" ${col === guess ? 'selected' : ''}>${escapeHtml(col)}</option>`).join('');
+  docAmountField = sel.value;
+}
+
+function renderDocRecipientFieldOptions(){
+  const sel = document.getElementById("docRecipientField");
+  const guess = columns.find(c => /e[-_]?mail/i.test(c)) || "";
+  sel.innerHTML = '<option value="">None</option>' +
+    columns.map(col => `<option value="${escapeHtml(col)}" ${col === guess ? 'selected' : ''}>${escapeHtml(col)}</option>`).join('');
+}
+
+function renderDocTableColumnsPicker(){
+  const wrap = document.getElementById("docTableColumnsPicker");
+  if (!docTableColumns.length) docTableColumns = [...columns];
+  wrap.innerHTML = columns.map(col => `
+    <label class="checkbox-row" style="margin-bottom:6px;">
+      <input type="checkbox" value="${escapeHtml(col)}" ${docTableColumns.includes(col) ? 'checked' : ''} onchange="onDocTableColumnToggle('${col.replace(/'/g,"\\'")}', this.checked)">
+      <span>${escapeHtml(col)}</span>
+    </label>
+  `).join('');
+}
+
+function onDocTableColumnToggle(col, checked){
+  if (checked && !docTableColumns.includes(col)) docTableColumns.push(col);
+  if (!checked) docTableColumns = docTableColumns.filter(c => c !== col);
+}
+
+function onDocGroupingConfigChange(){
+  docAmountField = document.getElementById("docAmountColumn").value;
+
+  const hint = document.getElementById("docLetterZipHint");
+  const needsTemplate = (document.getElementById("docAttachLetter").checked || document.getElementById("docAttachZip").checked) && !templateB64;
+  hint.textContent = needsTemplate
+    ? "⚠ Upload a Word template above first — otherwise the letter / zipped case documents can't be generated."
+    : "";
+
+  recomputeDocGroups();
+  refreshMappingAndPreviewState();
+}
+
+function recomputeDocGroups(){
+  if (!excelData.length || !docGroupFields.length){
+    docGroups = [];
+    renderDocGroupsPreview();
+    document.getElementById("docGroupBadge").textContent = "0 groups";
+    refreshMappingAndPreviewState();
+    return;
+  }
+
+  const groups = new Map();
+  excelData.forEach(row => {
+    const keyParts = docGroupFields.map(f => String(row[f] ?? '').trim() || '(blank)');
+    const key = keyParts.join(' | ');
+    if (!groups.has(key)) groups.set(key, { keyParts, rows: [] });
+    groups.get(key).rows.push(row);
+  });
+
+  docGroups = Array.from(groups.entries()).map(([key, g]) => {
+    let totalAmount = null;
+    if (docAmountField){
+      let sum = 0, ok = true;
+      g.rows.forEach(r => {
+        const v = parseFloat(String(r[docAmountField] ?? '').replace(/,/g, ''));
+        if (isNaN(v)) ok = false; else sum += v;
+      });
+      totalAmount = ok ? sum : null;
+    }
+    return { key, keyParts: g.keyParts, rows: g.rows, totalAmount };
+  });
+
+  document.getElementById("docGroupBadge").textContent = `${docGroups.length} groups`;
+  document.getElementById("docAmountColHeader").style.display = docAmountField ? '' : 'none';
+  renderDocGroupsPreview();
+  refreshMappingAndPreviewState();
+}
+
+function renderDocGroupsPreview(){
+  const body = document.getElementById("docGroupsBody");
+  if (!docGroups.length){
+    body.innerHTML = `<tr><td colspan="3" class="hint" style="padding:14px;">Pick at least one "Group cases by column" above to see groups here.</td></tr>`;
+    return;
+  }
+  body.innerHTML = docGroups.map(g => `
+    <tr>
+      <td>${escapeHtml(g.key)}</td>
+      <td>${g.rows.length}</td>
+      <td ${docAmountField ? '' : 'style="display:none;"'}>${g.totalAmount !== null && g.totalAmount !== undefined ? g.totalAmount.toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2}) : (docAmountField ? 'N/A' : '')}</td>
+    </tr>
+  `).join('');
+}
+
+async function generateCompanyDocuments(){
+  if (!docGroupFields.length){
+    showToast("Pick at least one column to group by.");
+    return;
+  }
+  if (!docGroups.length) recomputeDocGroups();
+  if (!docGroups.length){
+    showToast("No groups found — check your grouping column(s).");
+    return;
+  }
+
+  const attachLetter = document.getElementById("docAttachLetter").checked;
+  const attachTable = document.getElementById("docAttachTable").checked;
+  const attachExcel = document.getElementById("docAttachExcel").checked;
+  const attachZip = document.getElementById("docAttachZip").checked;
+
+  if (!attachLetter && !attachTable && !attachExcel && !attachZip){
+    showToast("Pick at least one document type to generate per group.");
+    return;
+  }
+  if ((attachLetter || attachZip) && !templateB64){
+    showToast("Upload a Word template first (needed for the letter / zipped case documents), or turn those off.");
+    return;
+  }
+
+  const btn = document.getElementById("generateBtn");
+  btn.disabled = true;
+  btn.style.opacity = ".7";
+  showToast(`Generating documents for ${docGroups.length} group(s)…`);
+
+  try {
+    await downloadFilePost("/api/generate", {
+      mode: "company",
+      template_b64: templateB64,
+      mapping: mapping,
+      rows: excelData,
+      column_types: columnTypes,
+      filename_field: document.getElementById("filenameField").value,
+      group_fields: docGroupFields,
+      amount_field: docAmountField || null,
+      recipient_field: document.getElementById("docRecipientField").value || null,
+      attach_letter: attachLetter,
+      attach_table: attachTable,
+      table_columns: docTableColumns.length ? docTableColumns : columns,
+      attach_excel: attachExcel,
+      excel_columns: columns,
+      attach_zip: attachZip
+    }, "group_documents.zip");
     showToast("ZIP file download started.");
   } catch (e) {
     showToast(e.message);
@@ -1253,6 +1564,7 @@ function buildCompanyDispatchPayload(group){
     group_field: groupByField,
     group_value: group.key,
     rows: group.rows,
+    column_types: columnTypes,
     recipient_email: group.recipient,
     amount_field: amountField || null,
     save_sent_copy: document.getElementById("saveSentCopy").checked,
@@ -1491,6 +1803,7 @@ function buildDispatchPayload(rows, recipientField){
     body: document.getElementById("emailBody").innerHTML,
     recipient_field: recipientField,
     rows: rows,
+    column_types: columnTypes,
     save_sent_copy: document.getElementById("saveSentCopy").checked,
     imap: getImapConfig(),
     attach_document: document.getElementById("attachDoc").checked,

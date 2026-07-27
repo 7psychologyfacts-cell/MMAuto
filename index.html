@@ -486,6 +486,21 @@
 
   <div class="tab-panel" id="tab-dispatch">
 
+  <!-- Send Mode -->
+  <section class="panel" style="margin-bottom:18px;">
+    <div class="panel-header">
+      <h3><svg class="icon"><use href="#icon-activity"></use></svg> Send Mode</h3>
+      <span class="badge" id="modeBadge">Per-Case</span>
+    </div>
+    <div class="segmented" role="tablist" style="margin-bottom:10px;">
+      <input type="radio" id="modePerCase" name="dispatchMode" value="per-case" checked onchange="switchDispatchMode('per-case')">
+      <label for="modePerCase">Per-Case Email</label>
+      <input type="radio" id="modeCompany" name="dispatchMode" value="company" onchange="switchDispatchMode('company')">
+      <label for="modeCompany">Company-wise Email</label>
+    </div>
+    <p class="hint" id="modeHint">One email per row/case — each recipient gets their own document (current default behaviour).</p>
+  </section>
+
   <section class="preview-grid">
 
     <!-- Email Template Designer -->
@@ -556,7 +571,7 @@
         <p>Warm regards</p>
       </div>
 
-      <label class="checkbox-row">
+      <label class="checkbox-row" id="attachDocRow">
         <input type="checkbox" id="attachDoc" checked>
         <span>Automatically attach the merged Word document to each email</span>
       </label>
@@ -569,8 +584,8 @@
         <span class="badge">Sending</span>
       </div>
 
-      <label class="field-label" for="recipientColumn">Recipient email column</label>
-      <select id="recipientColumn" class="text-input"></select>
+      <label class="field-label" for="recipientColumn" id="recipientColumnLabel">Recipient email column</label>
+      <select id="recipientColumn" class="text-input" onchange="if(dispatchMode==='company'){recomputeCompanyGroups();}"></select>
 
       <label class="field-label" for="smtpProvider">Email service provider</label>
       <select id="smtpProvider" class="text-input" onchange="applyProviderPreset()">
@@ -666,6 +681,60 @@
 
   </section>
 
+  <!-- Company-wise Settings (visible only in Company-wise mode) -->
+  <section class="panel" id="companyModePanel" style="display:none;margin-bottom:18px;">
+    <div class="panel-header">
+      <h3><svg class="icon"><use href="#icon-link"></use></svg> Company-wise Grouping</h3>
+      <span class="badge" id="groupBadge">0 companies</span>
+    </div>
+
+    <div class="field-grid">
+      <div>
+        <label class="field-label" for="groupByColumn">Group cases by column</label>
+        <select id="groupByColumn" class="text-input" onchange="onGroupingConfigChange()"></select>
+      </div>
+      <div>
+        <label class="field-label" for="amountColumn">Amount column (optional, for {{Total_...}} tag)</label>
+        <select id="amountColumn" class="text-input" onchange="onGroupingConfigChange()">
+          <option value="">None</option>
+        </select>
+      </div>
+    </div>
+
+    <p class="hint" style="margin-bottom:14px;">Each company's recipient email is taken from the <strong>Recipient email column</strong> set above in SMTP Configuration.</p>
+
+    <label class="field-label">Attachments to send per company</label>
+    <label class="checkbox-row">
+      <input type="checkbox" id="attachTableDoc" checked onchange="onGroupingConfigChange()">
+      <span>Summary Table Document (.docx) — one aligned table listing every case for that company</span>
+    </label>
+    <label class="checkbox-row" style="margin-top:8px;">
+      <input type="checkbox" id="attachExcelFiltered" checked onchange="onGroupingConfigChange()">
+      <span>Filtered Excel (.xlsx) — only that company's rows</span>
+    </label>
+    <label class="checkbox-row" style="margin-top:8px;">
+      <input type="checkbox" id="attachZipDocs" onchange="onGroupingConfigChange()">
+      <span>Individual case documents, zipped (.zip) — uses the Word template from the Document Generation tab</span>
+    </label>
+    <p class="hint" id="zipDocsHint" style="margin:6px 0 14px;"></p>
+
+    <div id="tableColumnsWrap">
+      <label class="field-label">Columns to include in the Summary Table Document</label>
+      <div class="mapping-scroll-container" id="tableColumnsPicker" style="max-height:140px;margin-bottom:16px;"></div>
+    </div>
+
+    <div class="panel-header" style="margin-top:4px;">
+      <h3 style="font-size:13px;">Company Groups Preview</h3>
+    </div>
+    <div class="table-scroll-container" style="max-height:220px;">
+      <table>
+        <thead><tr><th>Company</th><th>Cases</th><th>Recipient Email</th><th id="amountColHeader" style="display:none;">Total Amount</th></tr></thead>
+        <tbody id="companyGroupsBody"></tbody>
+      </table>
+    </div>
+    <p class="hint">Click a row to use that company for "Send Test Email". A ⚠ next to the email means rows in that group don't all share the same recipient email — the first one found will be used.</p>
+  </section>
+
   <!-- Email Shot Status -->
   <section class="panel" style="margin-bottom:8px;">
     <div class="panel-header">
@@ -693,7 +762,7 @@
         <svg class="icon icon-sm"><use href="#icon-download"></use></svg> Download Log (CSV)
       </button>
       <button class="btn btn-primary" id="dispatchBtn" onclick="startBulkDispatch()">
-        <svg class="icon icon-sm" style="stroke:#fff"><use href="#icon-send"></use></svg> Start Bulk Email Shot
+        <svg class="icon icon-sm" style="stroke:#fff"><use href="#icon-send"></use></svg> <span id="dispatchBtnLabel">Start Bulk Email Shot</span>
       </button>
     </div>
   </section>
@@ -717,7 +786,14 @@ let selectedRowIndex = 0;
 let sendLog = [];            // accumulated dispatch log (for CSV export)
 let dispatchRunning = false;
 
-const BATCH_SIZE = 12;       // rows per /api/send-emails call, avoids serverless timeouts
+let dispatchMode = 'per-case';   // 'per-case' | 'company'
+let groupByField = null;         // excel column used to group cases into companies
+let amountField = null;          // optional excel column used for {{Total_<col>}} tag
+let tableColumns = [];           // selected columns for the Summary Table Document
+let companyGroups = [];          // computed groups for company-wise mode: {key, rows, recipient, recipientConsistent, totalAmount}
+let selectedGroupKey = null;     // currently selected group (Send Test Email / highlight)
+
+const BATCH_SIZE = 1;        // 1 row per /api/send-emails call, so Sent/Failed/progress update LIVE after every single email instead of waiting for a whole batch
 
 /* ==========================================================================
    Utilities
@@ -797,6 +873,16 @@ async function handleExcelUpload(file){
     renderRowSelectorOptions();
     if (excelData.length) selectRow(0);
     refreshMappingAndPreviewState();
+
+    if (dispatchMode === 'company'){
+      renderGroupByColumnOptions();
+      renderAmountColumnOptions();
+      tableColumns = [];
+      renderTableColumnsPicker();
+      recomputeCompanyGroups();
+      renderMoreTagOptions();
+    }
+
     showToast(`Loaded ${data.row_count} rows from ${file.name}.`);
   } catch (e) {
     document.getElementById("excelFileMeta").textContent = "Upload failed — try again";
@@ -864,6 +950,7 @@ async function handleTemplateUpload(file){
 
     renderMappingRows();
     refreshMappingAndPreviewState();
+    if (dispatchMode === 'company') onGroupingConfigChange();
     showToast(`Found ${templateTags.length} tag(s) in ${file.name}.`);
   } catch (e) {
     document.getElementById("templateFileMeta").textContent = "Upload failed — try again";
@@ -986,9 +1073,254 @@ function renderRecipientColumnOptions(){
 
 function renderMoreTagOptions(){
   const sel = document.getElementById("moreTagSelect");
+
+  if (dispatchMode === 'company'){
+    const tags = [];
+    if (groupByField) tags.push(groupByField);
+    tags.push('Case_Count', 'Company_Email');
+    if (amountField) tags.push(`Total_${amountField}`);
+    sel.innerHTML = '<option value="">+ Insert a company-wise tag…</option>' +
+      tags.map(t => `<option value="{{${t}}}">{{${t}}}</option>`).join('');
+    document.getElementById("emailTagBadge").textContent = `${tags.length} tags available`;
+    return;
+  }
+
   sel.innerHTML = '<option value="">+ Insert an Excel column…</option>' +
     columns.map(col => `<option value="{{${col}}}">{{${col}}}</option>`).join('');
   document.getElementById("emailTagBadge").textContent = `${columns.length} columns available`;
+}
+
+/* ==========================================================================
+   Company-wise dispatch mode
+   ========================================================================== */
+function switchDispatchMode(mode){
+  dispatchMode = mode;
+
+  document.getElementById("modeBadge").textContent = mode === 'company' ? 'Company-wise' : 'Per-Case';
+  document.getElementById("modeHint").textContent = mode === 'company'
+    ? "One email per COMPANY — every matching company's cases are grouped together and attached (table doc / filtered excel / zipped case docs)."
+    : "One email per row/case — each recipient gets their own document (current default behaviour).";
+  document.getElementById("companyModePanel").style.display = mode === 'company' ? 'block' : 'none';
+
+  const attachDocRow = document.getElementById("attachDocRow");
+  if (attachDocRow) attachDocRow.style.display = mode === 'company' ? 'none' : 'flex';
+
+  document.getElementById("recipientColumnLabel").textContent = mode === 'company'
+    ? "Company's recipient email column"
+    : "Recipient email column";
+  document.getElementById("dispatchBtnLabel").textContent = mode === 'company'
+    ? "Start Company-wise Email Shot"
+    : "Start Bulk Email Shot";
+
+  if (mode === 'company' && excelData.length){
+    renderGroupByColumnOptions();
+    renderAmountColumnOptions();
+    if (!tableColumns.length) tableColumns = [...columns];
+    renderTableColumnsPicker();
+    recomputeCompanyGroups();
+  }
+  renderMoreTagOptions();
+}
+
+function renderGroupByColumnOptions(){
+  const sel = document.getElementById("groupByColumn");
+  const guess = columns.find(c => /company|insur|payer|tpa/i.test(c)) || columns[0];
+  sel.innerHTML = columns.map(col =>
+    `<option value="${escapeHtml(col)}" ${col === guess ? 'selected' : ''}>${escapeHtml(col)}</option>`
+  ).join('');
+  groupByField = sel.value;
+}
+
+function renderAmountColumnOptions(){
+  const sel = document.getElementById("amountColumn");
+  const guess = columns.find(c => /amount|amt|claim|bill|due|balance/i.test(c)) || "";
+  sel.innerHTML = '<option value="">None</option>' +
+    columns.map(col => `<option value="${escapeHtml(col)}" ${col === guess ? 'selected' : ''}>${escapeHtml(col)}</option>`).join('');
+  amountField = sel.value;
+}
+
+function renderTableColumnsPicker(){
+  const wrap = document.getElementById("tableColumnsPicker");
+  if (!tableColumns.length) tableColumns = [...columns];
+  wrap.innerHTML = columns.map(col => `
+    <label class="checkbox-row" style="margin-bottom:6px;">
+      <input type="checkbox" value="${escapeHtml(col)}" ${tableColumns.includes(col) ? 'checked' : ''} onchange="onTableColumnToggle('${col.replace(/'/g,"\\'")}', this.checked)">
+      <span>${escapeHtml(col)}</span>
+    </label>
+  `).join('');
+}
+
+function onTableColumnToggle(col, checked){
+  if (checked && !tableColumns.includes(col)) tableColumns.push(col);
+  if (!checked) tableColumns = tableColumns.filter(c => c !== col);
+}
+
+function onGroupingConfigChange(){
+  groupByField = document.getElementById("groupByColumn").value;
+  amountField = document.getElementById("amountColumn").value;
+
+  const zipHint = document.getElementById("zipDocsHint");
+  const zipChecked = document.getElementById("attachZipDocs").checked;
+  zipHint.textContent = (zipChecked && !templateB64)
+    ? "⚠ Upload a Word template in the Document Generation tab first — otherwise this attachment will be skipped."
+    : "";
+
+  renderMoreTagOptions();
+  recomputeCompanyGroups();
+}
+
+function recomputeCompanyGroups(){
+  if (!excelData.length || !groupByField){
+    companyGroups = [];
+    renderCompanyGroupsPreview();
+    return;
+  }
+
+  const recipientField = document.getElementById("recipientColumn").value;
+  const groups = new Map();
+  excelData.forEach(row => {
+    const key = String(row[groupByField] ?? '').trim() || '(blank)';
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(row);
+  });
+
+  companyGroups = Array.from(groups.entries()).map(([key, rows]) => {
+    const emails = [...new Set(rows.map(r => String(r[recipientField] ?? '').trim()).filter(Boolean))];
+    let totalAmount = null;
+    if (amountField){
+      let sum = 0, ok = true;
+      rows.forEach(r => {
+        const v = parseFloat(String(r[amountField] ?? '').replace(/,/g, ''));
+        if (isNaN(v)) ok = false; else sum += v;
+      });
+      totalAmount = ok ? sum : null;
+    }
+    return {
+      key,
+      rows,
+      recipient: emails[0] || '',
+      recipientConsistent: emails.length <= 1,
+      totalAmount
+    };
+  });
+
+  document.getElementById("groupBadge").textContent = `${companyGroups.length} companies`;
+  document.getElementById("amountColHeader").style.display = amountField ? '' : 'none';
+  if (!companyGroups.find(g => g.key === selectedGroupKey)){
+    selectedGroupKey = companyGroups.length ? companyGroups[0].key : null;
+  }
+  renderCompanyGroupsPreview();
+}
+
+function renderCompanyGroupsPreview(){
+  const body = document.getElementById("companyGroupsBody");
+  if (!companyGroups.length){
+    body.innerHTML = `<tr><td colspan="4" class="hint" style="padding:14px;">Upload spreadsheet data and pick a "Group cases by column" to see companies here.</td></tr>`;
+    return;
+  }
+  body.innerHTML = companyGroups.map(g => `
+    <tr class="${g.key === selectedGroupKey ? 'active-row' : ''}" onclick="selectCompanyGroup('${g.key.replace(/'/g,"\\'")}')">
+      <td>${escapeHtml(g.key)}</td>
+      <td>${g.rows.length}</td>
+      <td>${g.recipient ? escapeHtml(g.recipient) : '<span style="color:#B3261E;">missing</span>'}${g.recipientConsistent ? '' : ' ⚠'}</td>
+      <td ${amountField ? '' : 'style="display:none;"'}>${g.totalAmount !== null && g.totalAmount !== undefined ? g.totalAmount.toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2}) : (amountField ? 'N/A' : '')}</td>
+    </tr>
+  `).join('');
+}
+
+function selectCompanyGroup(key){
+  selectedGroupKey = key;
+  renderCompanyGroupsPreview();
+}
+
+function buildCompanyDispatchPayload(group){
+  return {
+    smtp: getSmtpConfig(),
+    from_name: document.getElementById("senderName").value.trim(),
+    from_email: document.getElementById("senderEmail").value.trim(),
+    subject: document.getElementById("emailSubject").value,
+    body: document.getElementById("emailBody").innerHTML,
+    group_field: groupByField,
+    group_value: group.key,
+    rows: group.rows,
+    recipient_email: group.recipient,
+    amount_field: amountField || null,
+    save_sent_copy: document.getElementById("saveSentCopy").checked,
+    imap: getImapConfig(),
+    attach_table: document.getElementById("attachTableDoc").checked,
+    table_columns: tableColumns.length ? tableColumns : columns,
+    attach_excel: document.getElementById("attachExcelFiltered").checked,
+    excel_columns: columns,
+    attach_zip: document.getElementById("attachZipDocs").checked && !!templateB64,
+    template_b64: templateB64,
+    doc_mapping: mapping,
+    filename_field: document.getElementById("filenameField").value
+  };
+}
+
+async function startCompanyDispatch(){
+  const smtp = getSmtpConfig();
+  if (!smtp.host || !smtp.username){
+    showToast("Fill in the SMTP host and sender email first.");
+    return;
+  }
+  if (!groupByField){
+    showToast("Pick a 'Group cases by column' first.");
+    return;
+  }
+  if (!companyGroups.length) recomputeCompanyGroups();
+  if (!companyGroups.length){
+    showToast("No company groups found — check your grouping column.");
+    return;
+  }
+  if (document.getElementById("attachZipDocs").checked && !templateB64){
+    showToast("Upload a Word template first, or turn off the zipped case documents attachment.");
+    return;
+  }
+
+  dispatchRunning = true;
+  sendLog = [];
+  const total = companyGroups.length;
+
+  document.getElementById("emailLog").innerHTML = "";
+  document.getElementById("statTotal").textContent = total;
+  document.getElementById("statSent").textContent = "0";
+  document.getElementById("statFailed").textContent = "0";
+  document.getElementById("progressFill").style.width = "0%";
+  setStatusBadge("Sending…", "badge-sending");
+
+  const dispatchBtn = document.getElementById("dispatchBtn");
+  dispatchBtn.disabled = true;
+  dispatchBtn.style.opacity = ".7";
+
+  let sent = 0, failed = 0, processed = 0;
+
+  try {
+    for (const group of companyGroups){
+      const payload = buildCompanyDispatchPayload(group);
+      const data = await postJSON("/api/send-company-group", payload);
+
+      data.log.forEach(entry => {
+        sendLog.push(entry);
+        appendLogLine(entry);
+        if (entry.status === "sent") sent++; else failed++;
+        processed++;
+      });
+
+      document.getElementById("statSent").textContent = sent;
+      document.getElementById("statFailed").textContent = failed;
+      document.getElementById("progressFill").style.width = Math.round((processed / total) * 100) + "%";
+    }
+    setStatusBadge("Completed", "badge-done");
+    showToast(`Company-wise dispatch completed: ${sent}/${total} sent${failed ? `, ${failed} failed` : ""}.`);
+  } catch (e) {
+    setStatusBadge("Error", "badge-fail");
+    showToast(`Dispatch stopped: ${e.message}`);
+  } finally {
+    dispatchRunning = false;
+    dispatchBtn.disabled = false;
+    dispatchBtn.style.opacity = "1";
+  }
 }
 
 function insertMoreTag(){
@@ -1105,6 +1437,28 @@ async function sendTestEmail(){
   const testAddress = prompt("Send a test email to:", document.getElementById("senderEmail").value || "");
   if (!testAddress) return;
 
+  if (dispatchMode === 'company'){
+    if (!groupByField){
+      showToast("Pick a 'Group cases by column' first.");
+      return;
+    }
+    if (!companyGroups.length) recomputeCompanyGroups();
+    const group = companyGroups.find(g => g.key === selectedGroupKey) || companyGroups[0];
+    if (!group){
+      showToast("No company group available to test with.");
+      return;
+    }
+    try {
+      const payload = buildCompanyDispatchPayload({ ...group, recipient: testAddress });
+      const data = await postJSON("/api/send-company-group", payload);
+      const entry = data.log[0];
+      showToast(entry && entry.status === "sent" ? `Test email sent to ${testAddress} (sample: ${group.key}).` : `Test email failed: ${entry ? entry.error : "unknown error"}`);
+    } catch (e) {
+      showToast(e.message);
+    }
+    return;
+  }
+
   const recipientField = document.getElementById("recipientColumn").value;
   const row = { ...excelData[selectedRowIndex], [recipientField]: testAddress };
 
@@ -1149,7 +1503,8 @@ function appendLogLine(entry){
   line.className = "log-line";
   const ok = entry.status === "sent";
   const copyNote = entry.sent_copy_saved === true ? " · copy saved" : (entry.sent_copy_saved === false ? " · copy failed" : "");
-  line.innerHTML = `<span>${escapeHtml(entry.recipient)}</span><span class="${ok ? 'log-status-ok' : 'log-status-fail'}">${ok ? 'Sent' + copyNote : 'Failed: ' + escapeHtml(entry.error || 'error')}</span>`;
+  const label = entry.group ? `${entry.group} (${entry.case_count} cases) → ${entry.recipient}` : entry.recipient;
+  line.innerHTML = `<span>${escapeHtml(label)}</span><span class="${ok ? 'log-status-ok' : 'log-status-fail'}">${ok ? 'Sent' + copyNote : 'Failed: ' + escapeHtml(entry.error || 'error')}</span>`;
   logEl.prepend(line);
 }
 
@@ -1157,6 +1512,10 @@ async function startBulkDispatch(){
   if (dispatchRunning) return;
   if (!excelData.length){
     showToast("Upload spreadsheet data first.");
+    return;
+  }
+  if (dispatchMode === 'company'){
+    await startCompanyDispatch();
     return;
   }
   const smtp = getSmtpConfig();
@@ -1221,7 +1580,7 @@ function downloadLogCSV(){
     showToast("No dispatch log yet — send some emails first.");
     return;
   }
-  const headers = ["timestamp","recipient","subject","status","sent_copy_saved","error"];
+  const headers = ["timestamp","group","case_count","recipient","subject","status","sent_copy_saved","error"];
   const rows = sendLog.map(e => headers.map(h => `"${String(e[h] ?? '').replace(/"/g,'""')}"`).join(","));
   const csv = [headers.join(","), ...rows].join("\r\n");
   const blob = new Blob(["\ufeff" + csv], { type: "text/csv;charset=utf-8;" });

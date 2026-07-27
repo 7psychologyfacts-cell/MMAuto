@@ -517,6 +517,7 @@
             <option value="">+ Insert an Excel column…</option>
           </select>
         </div>
+        <p class="hint" id="companyTagHint" style="display:none;margin-top:6px;">In Company-wise mode, "Whole company" tags summarise all cases; plain column tags (e.g. {{Patient_Name}}) pull the first case's value only.</p>
       </div>
 
       <label class="field-label" for="emailSubject">Subject line</label>
@@ -1075,13 +1076,21 @@ function renderMoreTagOptions(){
   const sel = document.getElementById("moreTagSelect");
 
   if (dispatchMode === 'company'){
-    const tags = [];
-    if (groupByField) tags.push(groupByField);
-    tags.push('Case_Count', 'Company_Email');
-    if (amountField) tags.push(`Total_${amountField}`);
-    sel.innerHTML = '<option value="">+ Insert a company-wise tag…</option>' +
-      tags.map(t => `<option value="{{${t}}}">{{${t}}}</option>`).join('');
-    document.getElementById("emailTagBadge").textContent = `${tags.length} tags available`;
+    const aggTags = [];
+    if (groupByField) aggTags.push(groupByField);
+    aggTags.push('Case_Count', 'Company_Email');
+    if (amountField) aggTags.push(`Total_${amountField}`);
+
+    const colTags = columns.filter(c => !aggTags.includes(c));
+
+    sel.innerHTML = '<option value="">+ Insert a tag…</option>' +
+      `<optgroup label="Whole company">` +
+        aggTags.map(t => `<option value="{{${t}}}">{{${t}}}</option>`).join('') +
+      `</optgroup>` +
+      `<optgroup label="Column (first case's value)">` +
+        colTags.map(c => `<option value="{{${c}}}">{{${c}}}</option>`).join('') +
+      `</optgroup>`;
+    document.getElementById("emailTagBadge").textContent = `${aggTags.length + colTags.length} tags available`;
     return;
   }
 
@@ -1111,6 +1120,7 @@ function switchDispatchMode(mode){
   document.getElementById("dispatchBtnLabel").textContent = mode === 'company'
     ? "Start Company-wise Email Shot"
     : "Start Bulk Email Shot";
+  document.getElementById("companyTagHint").style.display = mode === 'company' ? 'block' : 'none';
 
   if (mode === 'company' && excelData.length){
     renderGroupByColumnOptions();

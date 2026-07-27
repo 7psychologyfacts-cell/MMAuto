@@ -960,6 +960,8 @@ def send_company_group():
     excel_columns = data.get("excel_columns") or (list(rows[0].keys()) if rows else [])
 
     attach_zip = bool(data.get("attach_zip"))
+    attach_letter = bool(data.get("attach_letter"))
+    tag_aggregates = data.get("tag_aggregates") or {}
     template_b64 = data.get("template_b64")
     doc_mapping = data.get("doc_mapping") or {}
     filename_field = data.get("filename_field")
@@ -988,6 +990,13 @@ def send_company_group():
         entry["subject"] = subject
 
         attachments = []
+
+        if attach_letter and template_b64:
+            template_bytes = base64.b64decode(template_b64)
+            template_tags = extract_tags_from_docx(Document(io.BytesIO(template_bytes)))
+            row_mapping = resolve_letter_tags(template_tags, tag_aggregates, ctx, rows, doc_mapping)
+            letter_bytes = fill_template(template_bytes, row_mapping)
+            attachments.append((letter_bytes, f"{safe_filename(group_value)}_letter.docx"))
 
         if attach_table:
             table_bytes = build_table_docx(str(group_value), rows, table_columns, column_types)

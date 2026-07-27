@@ -1079,7 +1079,7 @@ function renderMappingRows(){
     return;
   }
 
-  container.innerHTML = templateTags.map(tag => {
+  container.innerHTML = templateTags.map((tag, i) => {
     const guess = mapping[tag] || columns.find(c => c.toLowerCase() === tag.toLowerCase()) || columns[0];
     mapping[tag] = guess;
     return `
@@ -1088,7 +1088,7 @@ function renderMappingRows(){
         <label title="{{${escapeHtml(tag)}}}">{{${escapeHtml(tag)}}}</label>
         <span class="map-arrow">→</span>
       </div>
-      <select id="map-${escapeHtml(tag)}" onchange="onMappingChange('${tag.replace(/'/g,"\\'")}', this.value)">
+      <select id="map-${i}" data-tag="${escapeHtml(tag)}" onchange="onMappingChange(this)">
         ${columns.map(col => `<option value="${escapeHtml(col)}" ${col === guess ? 'selected' : ''}>${escapeHtml(col)}</option>`).join('')}
       </select>
     </div>`;
@@ -1097,8 +1097,8 @@ function renderMappingRows(){
   document.getElementById("mappingBadge").textContent = `${templateTags.length} fields mapped`;
 }
 
-function onMappingChange(tag, col){
-  mapping[tag] = col;
+function onMappingChange(sel){
+  mapping[sel.dataset.tag] = sel.value;
   renderPreview(selectedRowIndex);
 }
 
@@ -1251,17 +1251,18 @@ function renderDocGroupFieldsPicker(){
     const guess = columns.find(c => /company|insur|payer|tpa/i.test(c));
     if (guess) docGroupFields = [guess];
   }
-  wrap.innerHTML = columns.map(col => `
+  wrap.innerHTML = columns.map((col, i) => `
     <label class="checkbox-row" style="margin-bottom:6px;">
-      <input type="checkbox" value="${escapeHtml(col)}" ${docGroupFields.includes(col) ? 'checked' : ''} onchange="onDocGroupFieldToggle('${col.replace(/'/g,"\\'")}', this.checked)">
+      <input type="checkbox" data-idx="${i}" ${docGroupFields.includes(col) ? 'checked' : ''} onchange="onDocGroupFieldToggle(this)">
       <span>${escapeHtml(col)}</span>
     </label>
   `).join('');
 }
 
-function onDocGroupFieldToggle(col, checked){
-  if (checked && !docGroupFields.includes(col)) docGroupFields.push(col);
-  if (!checked) docGroupFields = docGroupFields.filter(c => c !== col);
+function onDocGroupFieldToggle(cb){
+  const col = columns[parseInt(cb.dataset.idx, 10)];
+  if (cb.checked && !docGroupFields.includes(col)) docGroupFields.push(col);
+  if (!cb.checked) docGroupFields = docGroupFields.filter(c => c !== col);
   onDocGroupingConfigChange();
 }
 
@@ -1283,17 +1284,18 @@ function renderDocRecipientFieldOptions(){
 function renderDocTableColumnsPicker(){
   const wrap = document.getElementById("docTableColumnsPicker");
   if (!docTableColumns.length) docTableColumns = [...columns];
-  wrap.innerHTML = columns.map(col => `
+  wrap.innerHTML = columns.map((col, i) => `
     <label class="checkbox-row" style="margin-bottom:6px;">
-      <input type="checkbox" value="${escapeHtml(col)}" ${docTableColumns.includes(col) ? 'checked' : ''} onchange="onDocTableColumnToggle('${col.replace(/'/g,"\\'")}', this.checked)">
+      <input type="checkbox" data-idx="${i}" ${docTableColumns.includes(col) ? 'checked' : ''} onchange="onDocTableColumnToggle(this)">
       <span>${escapeHtml(col)}</span>
     </label>
   `).join('');
 }
 
-function onDocTableColumnToggle(col, checked){
-  if (checked && !docTableColumns.includes(col)) docTableColumns.push(col);
-  if (!checked) docTableColumns = docTableColumns.filter(c => c !== col);
+function onDocTableColumnToggle(cb){
+  const col = columns[parseInt(cb.dataset.idx, 10)];
+  if (cb.checked && !docTableColumns.includes(col)) docTableColumns.push(col);
+  if (!cb.checked) docTableColumns = docTableColumns.filter(c => c !== col);
 }
 
 function onDocGroupingConfigChange(){
@@ -1332,21 +1334,21 @@ function renderDocLetterTagSetup(){
 
   const numericCols = columns; // let user pick any column; sum() reports N/A if it isn't numeric
 
-  document.getElementById("docLetterTagSetup").innerHTML = templateTags.map(tag => {
+  document.getElementById("docLetterTagSetup").innerHTML = templateTags.map((tag, i) => {
     const agg = docTagAggregates[tag] || { type: "column" };
     const opt = (val, label) => `<option value="${val}" ${agg.type === val ? 'selected' : ''}>${label}</option>`;
     let extra = "";
     if (agg.type === "sum"){
-      extra = `<select class="text-input" style="margin-top:6px;" onchange="onDocTagAggChange('${tag.replace(/'/g,"\\'")}','column', this.value)">
+      extra = `<select class="text-input" style="margin-top:6px;" data-tagidx="${i}" data-field="column" onchange="onDocTagAggChange(this)">
         ${numericCols.map(c => `<option value="${escapeHtml(c)}" ${agg.column === c ? 'selected' : ''}>${escapeHtml(c)}</option>`).join('')}
       </select>`;
     } else if (agg.type === "diff"){
       extra = `<div style="display:flex;gap:8px;margin-top:6px;">
-        <select class="text-input" onchange="onDocTagAggChange('${tag.replace(/'/g,"\\'")}','column_a', this.value)">
+        <select class="text-input" data-tagidx="${i}" data-field="column_a" onchange="onDocTagAggChange(this)">
           ${numericCols.map(c => `<option value="${escapeHtml(c)}" ${agg.column_a === c ? 'selected' : ''}>${escapeHtml(c)}</option>`).join('')}
         </select>
         <span style="align-self:center;">−</span>
-        <select class="text-input" onchange="onDocTagAggChange('${tag.replace(/'/g,"\\'")}','column_b', this.value)">
+        <select class="text-input" data-tagidx="${i}" data-field="column_b" onchange="onDocTagAggChange(this)">
           ${numericCols.map(c => `<option value="${escapeHtml(c)}" ${agg.column_b === c ? 'selected' : ''}>${escapeHtml(c)}</option>`).join('')}
         </select>
       </div>`;
@@ -1358,7 +1360,7 @@ function renderDocLetterTagSetup(){
         <label title="{{${escapeHtml(tag)}}}">{{${escapeHtml(tag)}}}</label>
         <span class="map-arrow">→</span>
       </div>
-      <select class="text-input" onchange="onDocTagAggChange('${tag.replace(/'/g,"\\'")}','type', this.value)">
+      <select class="text-input" data-tagidx="${i}" data-field="type" onchange="onDocTagAggChange(this)">
         ${opt("column", "Column value (first case in group)")}
         ${opt("count", "Number of cases in the group")}
         ${opt("sum", "Sum of a column across the group")}
@@ -1369,7 +1371,10 @@ function renderDocLetterTagSetup(){
   }).join('');
 }
 
-function onDocTagAggChange(tag, field, value){
+function onDocTagAggChange(sel){
+  const tag = templateTags[parseInt(sel.dataset.tagidx, 10)];
+  const field = sel.dataset.field;
+  const value = sel.value;
   const current = docTagAggregates[tag] || { type: "column" };
   if (field === "type"){
     if (value === "column") delete docTagAggregates[tag];
@@ -1624,17 +1629,18 @@ function renderAmountColumnOptions(){
 function renderTableColumnsPicker(){
   const wrap = document.getElementById("tableColumnsPicker");
   if (!tableColumns.length) tableColumns = [...columns];
-  wrap.innerHTML = columns.map(col => `
+  wrap.innerHTML = columns.map((col, i) => `
     <label class="checkbox-row" style="margin-bottom:6px;">
-      <input type="checkbox" value="${escapeHtml(col)}" ${tableColumns.includes(col) ? 'checked' : ''} onchange="onTableColumnToggle('${col.replace(/'/g,"\\'")}', this.checked)">
+      <input type="checkbox" data-idx="${i}" ${tableColumns.includes(col) ? 'checked' : ''} onchange="onTableColumnToggle(this)">
       <span>${escapeHtml(col)}</span>
     </label>
   `).join('');
 }
 
-function onTableColumnToggle(col, checked){
-  if (checked && !tableColumns.includes(col)) tableColumns.push(col);
-  if (!checked) tableColumns = tableColumns.filter(c => c !== col);
+function onTableColumnToggle(cb){
+  const col = columns[parseInt(cb.dataset.idx, 10)];
+  if (cb.checked && !tableColumns.includes(col)) tableColumns.push(col);
+  if (!cb.checked) tableColumns = tableColumns.filter(c => c !== col);
 }
 
 function onGroupingConfigChange(){
@@ -1701,8 +1707,8 @@ function renderCompanyGroupsPreview(){
     body.innerHTML = `<tr><td colspan="4" class="hint" style="padding:14px;">Upload spreadsheet data and pick a "Group cases by column" to see companies here.</td></tr>`;
     return;
   }
-  body.innerHTML = companyGroups.map(g => `
-    <tr class="${g.key === selectedGroupKey ? 'active-row' : ''}" onclick="selectCompanyGroup('${g.key.replace(/'/g,"\\'")}')">
+  body.innerHTML = companyGroups.map((g, i) => `
+    <tr class="${g.key === selectedGroupKey ? 'active-row' : ''}" data-idx="${i}" onclick="selectCompanyGroup(this)">
       <td>${escapeHtml(g.key)}</td>
       <td>${g.rows.length}</td>
       <td>${g.recipient ? escapeHtml(g.recipient) : '<span style="color:#B3261E;">missing</span>'}${g.recipientConsistent ? '' : ' ⚠'}</td>
@@ -1711,8 +1717,8 @@ function renderCompanyGroupsPreview(){
   `).join('');
 }
 
-function selectCompanyGroup(key){
-  selectedGroupKey = key;
+function selectCompanyGroup(tr){
+  selectedGroupKey = companyGroups[parseInt(tr.dataset.idx, 10)].key;
   renderCompanyGroupsPreview();
 }
 

@@ -41,6 +41,8 @@ from docx.enum.section import WD_ORIENT
 from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
 from docx.shared import Cm, Pt
+from docx.table import Table
+from docx.text.paragraph import Paragraph
 from flask import Flask, jsonify, request, send_file, send_from_directory
 
 app = Flask(__name__, static_folder=None)
@@ -48,7 +50,11 @@ app = Flask(__name__, static_folder=None)
 # Max upload size: 15 MB (Excel + docx templates are small; keeps abuse in check)
 app.config["MAX_CONTENT_LENGTH"] = 15 * 1024 * 1024
 
-TAG_PATTERN = re.compile(r"\{\{\s*([A-Za-z0-9_.\-]+)\s*\}\}")
+# NOTE: widened from the old [A-Za-z0-9_.\-]+ so that {{tags}} built directly
+# from raw Excel column names (which very often contain spaces, parentheses,
+# ampersands etc., e.g. "{{Sponsor Name (Standard)}}") are still recognised
+# and substituted correctly instead of being left in the output verbatim.
+TAG_PATTERN = re.compile(r"\{\{\s*([^{}]+?)\s*\}\}")
 
 
 # --------------------------------------------------------------------------
@@ -181,6 +187,37 @@ def extract_tags_from_docx(doc: Document):
                 scan(p.text)
 
     return sorted(tags)
+
+
+def iter_block_items(doc: Document):
+    """Yield paragraphs and tables in the exact order they appear in the
+    document body (python-docx's doc.paragraphs / doc.tables lose the
+    original interleaving, which is what made the old preview unable to
+    show the document 'as-is')."""
+    body = doc.element.body
+    for child in body.iterchildren():
+        if child.tag == qn("w:p"):
+            yield Paragraph(child, doc)
+        elif child.tag == qn("w:tbl"):
+            yield Table(child, doc)
+
+
+def extract_template_blocks(doc: Document):
+    """Return the template's body content, in original order, as a plain
+    JSON-safe list of blocks (paragraph text / table rows) with {{tags}}
+    left intact. The frontend uses this to render a full, faithful preview
+    of the actual uploaded document instead of just a bare list of tags."""
+    blocks = []
+    for item in iter_block_items(doc):
+        if isinstance(item, Paragraph):
+            text = item.text
+            if text.strip() == "":
+                continue
+            blocks.append({"type": "paragraph", "text": text})
+        elif isinstance(item, Table):
+            rows = [[cell.text for cell in row.cells] for row in item.rows]
+            blocks.append({"type": "table", "rows": rows})
+    return blocks
 
 
 def replace_tags_in_paragraph(paragraph, mapping):
@@ -597,6 +634,7 @@ def upload_template():
     try:
         doc = Document(io.BytesIO(file_bytes))
         tags = extract_tags_from_docx(doc)
+        blocks = extract_template_blocks(doc)
     except Exception as e:
         return jsonify({"error": f"Could not read Word template: {e}"}), 400
 
@@ -606,6 +644,7 @@ def upload_template():
     return jsonify({
         "filename": f.filename,
         "tags": tags,
+        "blocks": blocks,
         "template_b64": base64.b64encode(file_bytes).decode("ascii"),
     })
 
@@ -878,6 +917,12 @@ def send_emails():
 #      one .docx per case, bundled into a .zip (optional)
 # The frontend calls this once per company (like /api/send-emails is called
 # once per small batch) so the Email Shot Status panel can update live.
+#
+# Grouping now supports MORE THAN ONE column (e.g. Company + Branch) to
+# match the Document Generation tab: the frontend sends `group_fields`
+# (a list) plus `group_key_values` (that group's value for each field);
+# `group_field` / `group_value` (singular) are still accepted for
+# backwards compatibility with older frontend builds.
 # --------------------------------------------------------------------------
 @app.route("/api/send-company-group", methods=["POST"])
 def send_company_group():
@@ -889,8 +934,13 @@ def send_company_group():
     subject_template = data.get("subject") or ""
     body_template = data.get("body") or ""
 
-    group_field = data.get("group_field") or ""
+    group_fields = data.get("group_fields")
+    if not group_fields:
+        legacy_field = data.get("group_field") or ""
+        group_fields = [legacy_field] if legacy_field else []
+    group_key_values = data.get("group_key_values") or {}
     group_value = data.get("group_value", "")
+
     rows = data.get("rows") or []
     recipient_email = str(data.get("recipient_email") or "").strip()
     amount_field = data.get("amount_field") or None
@@ -928,7 +978,7 @@ def send_company_group():
         return jsonify({"log": [entry]})
 
     try:
-        ctx = compute_group_aggregates([group_field] if group_field else [], {group_field: group_value} if group_field else {}, rows, recipient_email, amount_field, column_types)
+        ctx = compute_group_aggregates(group_fields, group_key_values, rows, recipient_email, amount_field, column_types)
         subject = merge_text(subject_template, ctx)
         body = merge_text(body_template, ctx)
         entry["subject"] = subject

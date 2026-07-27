@@ -245,9 +245,17 @@ def build_table_docx(group_label: str, rows: list, columns: list) -> bytes:
 
 def compute_group_aggregates(group_field: str, group_value: str, rows: list, recipient_email: str, amount_field: str = None) -> dict:
     """Build the merge context available to the subject/body when sending one
-    email per company: {{<group_field>}}, {{Case_Count}}, {{Company_Email}},
-    and {{Total_<amount_field>}} if an amount column was chosen."""
+    email per company: every plain excel column (taken from the group's
+    FIRST row, since a single email can't hold 2500 different values), plus
+    the aggregate tags {{<group_field>}}, {{Case_Count}}, {{Company_Email}},
+    and {{Total_<amount_field>}} if an amount column was chosen. Aggregate
+    tags always take priority over a same-named plain column."""
     ctx = {}
+
+    if rows:
+        for k, v in rows[0].items():
+            ctx[str(k)] = v
+
     if group_field:
         ctx[group_field] = group_value
     ctx["Case_Count"] = str(len(rows))

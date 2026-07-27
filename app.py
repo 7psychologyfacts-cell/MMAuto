@@ -41,8 +41,6 @@ from docx.enum.section import WD_ORIENT
 from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
 from docx.shared import Cm, Pt
-from docx.table import Table
-from docx.text.paragraph import Paragraph
 from flask import Flask, jsonify, request, send_file, send_from_directory
 
 app = Flask(__name__, static_folder=None)
@@ -50,11 +48,7 @@ app = Flask(__name__, static_folder=None)
 # Max upload size: 15 MB (Excel + docx templates are small; keeps abuse in check)
 app.config["MAX_CONTENT_LENGTH"] = 15 * 1024 * 1024
 
-# NOTE: widened from the old [A-Za-z0-9_.\-]+ so that {{tags}} built directly
-# from raw Excel column names (which very often contain spaces, parentheses,
-# ampersands etc., e.g. "{{Sponsor Name (Standard)}}") are still recognised
-# and substituted correctly instead of being left in the output verbatim.
-TAG_PATTERN = re.compile(r"\{\{\s*([^{}]+?)\s*\}\}")
+TAG_PATTERN = re.compile(r"\{\{\s*([A-Za-z0-9_.\-]+)\s*\}\}")
 
 
 # --------------------------------------------------------------------------
@@ -187,37 +181,6 @@ def extract_tags_from_docx(doc: Document):
                 scan(p.text)
 
     return sorted(tags)
-
-
-def iter_block_items(doc: Document):
-    """Yield paragraphs and tables in the exact order they appear in the
-    document body (python-docx's doc.paragraphs / doc.tables lose the
-    original interleaving, which is what made the old preview unable to
-    show the document 'as-is')."""
-    body = doc.element.body
-    for child in body.iterchildren():
-        if child.tag == qn("w:p"):
-            yield Paragraph(child, doc)
-        elif child.tag == qn("w:tbl"):
-            yield Table(child, doc)
-
-
-def extract_template_blocks(doc: Document):
-    """Return the template's body content, in original order, as a plain
-    JSON-safe list of blocks (paragraph text / table rows) with {{tags}}
-    left intact. The frontend uses this to render a full, faithful preview
-    of the actual uploaded document instead of just a bare list of tags."""
-    blocks = []
-    for item in iter_block_items(doc):
-        if isinstance(item, Paragraph):
-            text = item.text
-            if text.strip() == "":
-                continue
-            blocks.append({"type": "paragraph", "text": text})
-        elif isinstance(item, Table):
-            rows = [[cell.text for cell in row.cells] for row in item.rows]
-            blocks.append({"type": "table", "rows": rows})
-    return blocks
 
 
 def replace_tags_in_paragraph(paragraph, mapping):
@@ -454,6 +417,65 @@ def build_table_docx(group_label: str, rows: list, columns: list, column_types: 
     return out.getvalue()
 
 
+def sum_column(rows: list, col: str):
+    """Sum a column across a list of rows. Returns (total, ok) where ok is
+    False if any non-blank cell in that column couldn't be parsed as a
+    number (mirrors the parsing rules already used for amount_field)."""
+    total = 0.0
+    ok = True
+    for row in rows:
+        raw = str(row.get(col, "")).replace(",", "").strip()
+        if not raw:
+            continue
+        try:
+            total += float(raw)
+        except ValueError:
+            ok = False
+    return total, ok
+
+
+def resolve_letter_tags(template_tags, tag_aggregates: dict, ctx: dict, rows: list, mapping: dict) -> dict:
+    """Build the final {tag: value} mapping used to fill a company-wise
+    letter template. For each tag found in the template:
+      1. If the user explicitly told us how to aggregate this tag
+         (tag_aggregates[tag] — count / sum of a column / difference of two
+         column sums), compute that directly. This is what lets a template
+         use ANY tag name (e.g. {{Total_Claimed_Amount}}) for a real sum,
+         instead of requiring the tag to literally be named
+         {{Total_<ExcelColumnName>}}.
+      2. Otherwise, if it's one of the automatic aggregate tags
+         (Case_Count, Group_Label, a group-by column, {{Total_<amount_field>}}...)
+         use that.
+      3. Otherwise fall back to the plain per-tag column mapping (the first
+         case's raw value) — for static info like company address/email.
+    """
+    tag_aggregates = tag_aggregates or {}
+    row_mapping = {}
+    for tag in template_tags:
+        agg = tag_aggregates.get(tag)
+        if agg:
+            kind = agg.get("type")
+            if kind == "count":
+                row_mapping[tag] = str(len(rows))
+            elif kind == "sum":
+                total, ok = sum_column(rows, agg.get("column", ""))
+                row_mapping[tag] = f"{total:,.2f}" if ok else "N/A"
+            elif kind == "diff":
+                a_total, a_ok = sum_column(rows, agg.get("column_a", ""))
+                b_total, b_ok = sum_column(rows, agg.get("column_b", ""))
+                row_mapping[tag] = f"{(a_total - b_total):,.2f}" if (a_ok and b_ok) else "N/A"
+            else:
+                row_mapping[tag] = ""
+            continue
+
+        if tag in ctx:
+            row_mapping[tag] = ctx[tag]
+        else:
+            col = mapping.get(tag)
+            row_mapping[tag] = ctx.get(col, "") if col else ""
+    return row_mapping
+
+
 def compute_group_aggregates(group_fields, group_key_values: dict, rows: list, recipient_email: str, amount_field: str = None, column_types: dict = None) -> dict:
     """Build the merge context available to the template/subject/body when
     sending or generating one document per group: every plain excel column
@@ -634,7 +656,6 @@ def upload_template():
     try:
         doc = Document(io.BytesIO(file_bytes))
         tags = extract_tags_from_docx(doc)
-        blocks = extract_template_blocks(doc)
     except Exception as e:
         return jsonify({"error": f"Could not read Word template: {e}"}), 400
 
@@ -644,7 +665,6 @@ def upload_template():
     return jsonify({
         "filename": f.filename,
         "tags": tags,
-        "blocks": blocks,
         "template_b64": base64.b64encode(file_bytes).decode("ascii"),
     })
 
@@ -702,6 +722,7 @@ def generate_documents():
         return jsonify({"error": "Pick at least one column to group by"}), 400
     amount_field = data.get("amount_field") or None
     recipient_field = data.get("recipient_field") or None  # optional, only feeds {{Company_Email}}
+    tag_aggregates = data.get("tag_aggregates") or {}  # {{tag}}: {"type": "count"|"sum"|"diff", ...}
 
     attach_letter = bool(data.get("attach_letter"))
     attach_table = bool(data.get("attach_table"))
@@ -748,13 +769,7 @@ def generate_documents():
             if attach_letter:
                 ctx = compute_group_aggregates(group_fields, g["key_values"], g_rows, recipient_email, amount_field, column_types)
                 template_tags = extract_tags_from_docx(Document(io.BytesIO(template_bytes)))
-                row_mapping = {}
-                for tag in template_tags:
-                    if tag in ctx:
-                        row_mapping[tag] = ctx[tag]
-                    else:
-                        col = mapping.get(tag)
-                        row_mapping[tag] = ctx.get(col, "") if col else ""
+                row_mapping = resolve_letter_tags(template_tags, tag_aggregates, ctx, g_rows, mapping)
                 doc_bytes = fill_template(template_bytes, row_mapping)
                 zf.writestr(f"{label}_letter.docx", doc_bytes)
 
@@ -917,12 +932,6 @@ def send_emails():
 #      one .docx per case, bundled into a .zip (optional)
 # The frontend calls this once per company (like /api/send-emails is called
 # once per small batch) so the Email Shot Status panel can update live.
-#
-# Grouping now supports MORE THAN ONE column (e.g. Company + Branch) to
-# match the Document Generation tab: the frontend sends `group_fields`
-# (a list) plus `group_key_values` (that group's value for each field);
-# `group_field` / `group_value` (singular) are still accepted for
-# backwards compatibility with older frontend builds.
 # --------------------------------------------------------------------------
 @app.route("/api/send-company-group", methods=["POST"])
 def send_company_group():
@@ -934,13 +943,8 @@ def send_company_group():
     subject_template = data.get("subject") or ""
     body_template = data.get("body") or ""
 
-    group_fields = data.get("group_fields")
-    if not group_fields:
-        legacy_field = data.get("group_field") or ""
-        group_fields = [legacy_field] if legacy_field else []
-    group_key_values = data.get("group_key_values") or {}
+    group_field = data.get("group_field") or ""
     group_value = data.get("group_value", "")
-
     rows = data.get("rows") or []
     recipient_email = str(data.get("recipient_email") or "").strip()
     amount_field = data.get("amount_field") or None
@@ -978,7 +982,7 @@ def send_company_group():
         return jsonify({"log": [entry]})
 
     try:
-        ctx = compute_group_aggregates(group_fields, group_key_values, rows, recipient_email, amount_field, column_types)
+        ctx = compute_group_aggregates([group_field] if group_field else [], {group_field: group_value} if group_field else {}, rows, recipient_email, amount_field, column_types)
         subject = merge_text(subject_template, ctx)
         body = merge_text(body_template, ctx)
         entry["subject"] = subject

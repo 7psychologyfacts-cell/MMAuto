@@ -527,7 +527,7 @@
     <p class="hint" id="docLetterZipHint" style="margin:6px 0 14px;"></p>
 
     <div id="docTableColumnsWrap">
-      <label class="field-label">Columns to include in the Summary Table Document</label>
+      <label class="field-label">Columns to include (Summary Table Document + Filtered Excel)</label>
       <div class="mapping-scroll-container" id="docTableColumnsPicker" style="max-height:140px;margin-bottom:16px;"></div>
     </div>
 
@@ -765,11 +765,11 @@
       <span class="badge" id="groupBadge">0 companies</span>
     </div>
 
+    <label class="field-label">Group cases by column(s)</label>
+    <p class="hint" style="margin-top:0;">Pick one column (e.g. Insurance Company) or several together (e.g. Company + Branch) — each unique combination becomes one group / one email.</p>
+    <div class="mapping-scroll-container" id="groupFieldsPicker" style="max-height:140px;margin-bottom:14px;"></div>
+
     <div class="field-grid">
-      <div>
-        <label class="field-label" for="groupByColumn">Group cases by column</label>
-        <select id="groupByColumn" class="text-input" onchange="onGroupingConfigChange()"></select>
-      </div>
       <div>
         <label class="field-label" for="amountColumn">Amount column (optional, for {{Total_...}} tag)</label>
         <select id="amountColumn" class="text-input" onchange="onGroupingConfigChange()">
@@ -796,7 +796,7 @@
     <p class="hint" id="zipDocsHint" style="margin:6px 0 14px;"></p>
 
     <div id="tableColumnsWrap">
-      <label class="field-label">Columns to include in the Summary Table Document</label>
+      <label class="field-label">Columns to include (Summary Table Document + Filtered Excel)</label>
       <div class="mapping-scroll-container" id="tableColumnsPicker" style="max-height:140px;margin-bottom:16px;"></div>
     </div>
 
@@ -858,16 +858,17 @@ let excelData = [];          // array of row objects
 let columns = [];            // excel column names
 let templateTags = [];       // {{tag}} names found in the uploaded docx
 let templateB64 = null;      // base64 of the uploaded docx template
+let templateBlocks = [];     // full document body (paragraphs/tables, in order) with {{tags}} left intact — used for the full Live Document Preview
 let mapping = {};            // { tag: excelColumnName }
 let selectedRowIndex = 0;
 let sendLog = [];            // accumulated dispatch log (for CSV export)
 let dispatchRunning = false;
 
 let dispatchMode = 'per-case';   // 'per-case' | 'company'
-let groupByField = null;         // excel column used to group cases into companies
+let groupByFields = [];          // one or more excel columns used to group cases into companies
 let amountField = null;          // optional excel column used for {{Total_<col>}} tag
-let tableColumns = [];           // selected columns for the Summary Table Document
-let companyGroups = [];          // computed groups for company-wise mode: {key, rows, recipient, recipientConsistent, totalAmount}
+let tableColumns = [];           // selected columns for the Summary Table Document + Filtered Excel
+let companyGroups = [];          // computed groups for company-wise mode: {key, keyValues, rows, recipient, recipientConsistent, totalAmount}
 let selectedGroupKey = null;     // currently selected group (Send Test Email / highlight)
 
 let columnTypes = {};            // { excelColumnName: 'number' | 'date' | 'text' } — from /api/upload-data
@@ -875,7 +876,7 @@ let columnTypes = {};            // { excelColumnName: 'number' | 'date' | 'text
 let docMode = 'per-case';        // 'per-case' | 'company' — Document Generation tab
 let docGroupFields = [];         // one or more excel columns to group by (e.g. Company + Aging)
 let docAmountField = null;       // optional excel column used for {{Total_<col>}} tag
-let docTableColumns = [];        // selected columns for the Summary Table Document
+let docTableColumns = [];        // selected columns for the Summary Table Document + Filtered Excel
 let docGroups = [];              // computed groups: {key, keyParts, rows}
 
 const BATCH_SIZE = 1;        // 1 row per /api/send-emails call, so Sent/Failed/progress update LIVE after every single email instead of waiting for a whole batch
@@ -961,7 +962,7 @@ async function handleExcelUpload(file){
     refreshMappingAndPreviewState();
 
     if (dispatchMode === 'company'){
-      renderGroupByColumnOptions();
+      renderGroupByFieldsPicker();
       renderAmountColumnOptions();
       tableColumns = [];
       renderTableColumnsPicker();
@@ -1038,6 +1039,7 @@ async function handleTemplateUpload(file){
 
     templateTags = data.tags;
     templateB64 = data.template_b64;
+    templateBlocks = data.blocks || [];
     mapping = {};
 
     document.getElementById("templateFileMeta").textContent = `${templateTags.length} dynamic tags found`;
@@ -1108,6 +1110,21 @@ function refreshMappingAndPreviewState(){
 /* ==========================================================================
    3. Live preview
    ========================================================================== */
+function mergeTemplateText(text, row){
+  // text already comes from the server as plain text pulled from the docx —
+  // escape it for HTML first (this does NOT touch { or } so {{tags}} survive),
+  // then swap each known {{tag}} for the mapped value, highlighted.
+  let result = escapeHtml(text);
+  templateTags.forEach(tag => {
+    const col = mapping[tag];
+    const val = col ? row[col] : '';
+    const escapedTag = tag.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const re = new RegExp('\\{\\{\\s*' + escapedTag + '\\s*\\}\\}', 'g');
+    result = result.replace(re, `<span class="tag-highlight">${escapeHtml(val)}</span>`);
+  });
+  return result;
+}
+
 function renderPreview(idx){
   selectedRowIndex = idx;
   excelData.forEach((_, i) => {
@@ -1122,18 +1139,36 @@ function renderPreview(idx){
   }
 
   const row = excelData[idx];
-  const fields = templateTags.map(tag => {
-    const col = mapping[tag];
-    const val = col ? row[col] : '';
-    return `<p><strong>${escapeHtml(tag)}:</strong> <span class="tag-highlight">${escapeHtml(val)}</span></p>`;
-  }).join('');
+  let bodyHtml;
+
+  if (templateBlocks && templateBlocks.length){
+    // Full document preview — shows the uploaded template exactly as it
+    // reads (every paragraph and table, in order), with {{tags}} swapped
+    // for this row's values, instead of just a bare tag:value list.
+    bodyHtml = templateBlocks.map(block => {
+      if (block.type === 'table'){
+        const rowsHtml = block.rows.map(r =>
+          '<tr>' + r.map(cell => `<td style="border:1px solid var(--color-border);padding:6px 10px;">${mergeTemplateText(cell, row)}</td>`).join('') + '</tr>'
+        ).join('');
+        return `<table style="width:100%;border-collapse:collapse;margin:14px 0;font-family:var(--font-sans);font-size:13px;">${rowsHtml}</table>`;
+      }
+      return `<p>${mergeTemplateText(block.text, row)}</p>`;
+    }).join('');
+  } else {
+    // Fallback (older uploads without blocks data): tag:value list.
+    bodyHtml = templateTags.map(tag => {
+      const col = mapping[tag];
+      const val = col ? row[col] : '';
+      return `<p><strong>${escapeHtml(tag)}:</strong> <span class="tag-highlight">${escapeHtml(val)}</span></p>`;
+    }).join('');
+  }
 
   preview.innerHTML = `
     <div class="letterhead">
       <div class="letterhead-brand">Document Preview</div>
-      <div class="letterhead-tag">Fields as they will be merged into the template</div>
+      <div class="letterhead-tag">Your uploaded document, merged with this row's data</div>
     </div>
-    <div class="letter-body">${fields}</div>
+    <div class="letter-body">${bodyHtml}</div>
   `;
 }
 
@@ -1345,6 +1380,8 @@ async function generateCompanyDocuments(){
   btn.style.opacity = ".7";
   showToast(`Generating documents for ${docGroups.length} group(s)…`);
 
+  const selectedCols = docTableColumns.length ? docTableColumns : columns;
+
   try {
     await downloadFilePost("/api/generate", {
       mode: "company",
@@ -1358,9 +1395,9 @@ async function generateCompanyDocuments(){
       recipient_field: document.getElementById("docRecipientField").value || null,
       attach_letter: attachLetter,
       attach_table: attachTable,
-      table_columns: docTableColumns.length ? docTableColumns : columns,
+      table_columns: selectedCols,
       attach_excel: attachExcel,
-      excel_columns: columns,
+      excel_columns: selectedCols,
       attach_zip: attachZip
     }, "group_documents.zip");
     showToast("ZIP file download started.");
@@ -1387,8 +1424,7 @@ function renderMoreTagOptions(){
   const sel = document.getElementById("moreTagSelect");
 
   if (dispatchMode === 'company'){
-    const aggTags = [];
-    if (groupByField) aggTags.push(groupByField);
+    const aggTags = [...groupByFields];
     aggTags.push('Case_Count', 'Company_Email');
     if (amountField) aggTags.push(`Total_${amountField}`);
 
@@ -1434,7 +1470,7 @@ function switchDispatchMode(mode){
   document.getElementById("companyTagHint").style.display = mode === 'company' ? 'block' : 'none';
 
   if (mode === 'company' && excelData.length){
-    renderGroupByColumnOptions();
+    renderGroupByFieldsPicker();
     renderAmountColumnOptions();
     if (!tableColumns.length) tableColumns = [...columns];
     renderTableColumnsPicker();
@@ -1443,13 +1479,24 @@ function switchDispatchMode(mode){
   renderMoreTagOptions();
 }
 
-function renderGroupByColumnOptions(){
-  const sel = document.getElementById("groupByColumn");
-  const guess = columns.find(c => /company|insur|payer|tpa/i.test(c)) || columns[0];
-  sel.innerHTML = columns.map(col =>
-    `<option value="${escapeHtml(col)}" ${col === guess ? 'selected' : ''}>${escapeHtml(col)}</option>`
-  ).join('');
-  groupByField = sel.value;
+function renderGroupByFieldsPicker(){
+  const wrap = document.getElementById("groupFieldsPicker");
+  if (!groupByFields.length){
+    const guess = columns.find(c => /company|insur|payer|tpa/i.test(c));
+    if (guess) groupByFields = [guess];
+  }
+  wrap.innerHTML = columns.map(col => `
+    <label class="checkbox-row" style="margin-bottom:6px;">
+      <input type="checkbox" value="${escapeHtml(col)}" ${groupByFields.includes(col) ? 'checked' : ''} onchange="onGroupByFieldToggle('${col.replace(/'/g,"\\'")}', this.checked)">
+      <span>${escapeHtml(col)}</span>
+    </label>
+  `).join('');
+}
+
+function onGroupByFieldToggle(col, checked){
+  if (checked && !groupByFields.includes(col)) groupByFields.push(col);
+  if (!checked) groupByFields = groupByFields.filter(c => c !== col);
+  onGroupingConfigChange();
 }
 
 function renderAmountColumnOptions(){
@@ -1477,7 +1524,6 @@ function onTableColumnToggle(col, checked){
 }
 
 function onGroupingConfigChange(){
-  groupByField = document.getElementById("groupByColumn").value;
   amountField = document.getElementById("amountColumn").value;
 
   const zipHint = document.getElementById("zipDocsHint");
@@ -1491,21 +1537,25 @@ function onGroupingConfigChange(){
 }
 
 function recomputeCompanyGroups(){
-  if (!excelData.length || !groupByField){
+  if (!excelData.length || !groupByFields.length){
     companyGroups = [];
     renderCompanyGroupsPreview();
+    document.getElementById("groupBadge").textContent = "0 companies";
     return;
   }
 
   const recipientField = document.getElementById("recipientColumn").value;
   const groups = new Map();
   excelData.forEach(row => {
-    const key = String(row[groupByField] ?? '').trim() || '(blank)';
-    if (!groups.has(key)) groups.set(key, []);
-    groups.get(key).push(row);
+    const keyValues = {};
+    groupByFields.forEach(f => { keyValues[f] = String(row[f] ?? '').trim() || '(blank)'; });
+    const key = groupByFields.map(f => keyValues[f]).join(' | ');
+    if (!groups.has(key)) groups.set(key, { keyValues, rows: [] });
+    groups.get(key).rows.push(row);
   });
 
-  companyGroups = Array.from(groups.entries()).map(([key, rows]) => {
+  companyGroups = Array.from(groups.entries()).map(([key, g]) => {
+    const rows = g.rows;
     const emails = [...new Set(rows.map(r => String(r[recipientField] ?? '').trim()).filter(Boolean))];
     let totalAmount = null;
     if (amountField){
@@ -1518,6 +1568,7 @@ function recomputeCompanyGroups(){
     }
     return {
       key,
+      keyValues: g.keyValues,
       rows,
       recipient: emails[0] || '',
       recipientConsistent: emails.length <= 1,
@@ -1536,7 +1587,7 @@ function recomputeCompanyGroups(){
 function renderCompanyGroupsPreview(){
   const body = document.getElementById("companyGroupsBody");
   if (!companyGroups.length){
-    body.innerHTML = `<tr><td colspan="4" class="hint" style="padding:14px;">Upload spreadsheet data and pick a "Group cases by column" to see companies here.</td></tr>`;
+    body.innerHTML = `<tr><td colspan="4" class="hint" style="padding:14px;">Upload spreadsheet data and pick at least one "Group cases by column" to see companies here.</td></tr>`;
     return;
   }
   body.innerHTML = companyGroups.map(g => `
@@ -1555,13 +1606,15 @@ function selectCompanyGroup(key){
 }
 
 function buildCompanyDispatchPayload(group){
+  const selectedCols = tableColumns.length ? tableColumns : columns;
   return {
     smtp: getSmtpConfig(),
     from_name: document.getElementById("senderName").value.trim(),
     from_email: document.getElementById("senderEmail").value.trim(),
     subject: document.getElementById("emailSubject").value,
     body: document.getElementById("emailBody").innerHTML,
-    group_field: groupByField,
+    group_fields: groupByFields,
+    group_key_values: group.keyValues,
     group_value: group.key,
     rows: group.rows,
     column_types: columnTypes,
@@ -1570,9 +1623,9 @@ function buildCompanyDispatchPayload(group){
     save_sent_copy: document.getElementById("saveSentCopy").checked,
     imap: getImapConfig(),
     attach_table: document.getElementById("attachTableDoc").checked,
-    table_columns: tableColumns.length ? tableColumns : columns,
+    table_columns: selectedCols,
     attach_excel: document.getElementById("attachExcelFiltered").checked,
-    excel_columns: columns,
+    excel_columns: selectedCols,
     attach_zip: document.getElementById("attachZipDocs").checked && !!templateB64,
     template_b64: templateB64,
     doc_mapping: mapping,
@@ -1586,13 +1639,13 @@ async function startCompanyDispatch(){
     showToast("Fill in the SMTP host and sender email first.");
     return;
   }
-  if (!groupByField){
-    showToast("Pick a 'Group cases by column' first.");
+  if (!groupByFields.length){
+    showToast("Pick at least one 'Group cases by column' first.");
     return;
   }
   if (!companyGroups.length) recomputeCompanyGroups();
   if (!companyGroups.length){
-    showToast("No company groups found — check your grouping column.");
+    showToast("No company groups found — check your grouping column(s).");
     return;
   }
   if (document.getElementById("attachZipDocs").checked && !templateB64){
@@ -1760,8 +1813,8 @@ async function sendTestEmail(){
   if (!testAddress) return;
 
   if (dispatchMode === 'company'){
-    if (!groupByField){
-      showToast("Pick a 'Group cases by column' first.");
+    if (!groupByFields.length){
+      showToast("Pick at least one 'Group cases by column' first.");
       return;
     }
     if (!companyGroups.length) recomputeCompanyGroups();

@@ -793,6 +793,10 @@
 
     <label class="field-label">Attachments to send per company</label>
     <label class="checkbox-row">
+      <input type="checkbox" id="attachLetterDoc" onchange="onGroupingConfigChange()">
+      <span>Merged Letter Document (.docx) — same Word template + tag setup as the Document Generation tab</span>
+    </label>
+    <label class="checkbox-row" style="margin-top:8px;">
       <input type="checkbox" id="attachTableDoc" checked onchange="onGroupingConfigChange()">
       <span>Summary Table Document (.docx) — one aligned table listing every case for that company</span>
     </label>
@@ -1515,7 +1519,7 @@ async function generateCompanyDocuments(){
       recipient_field: document.getElementById("docRecipientField").value || null,
       attach_letter: attachLetter,
       attach_table: attachTable,
-      table_columns: docTableColumns.length ? docTableColumns : columns,
+      table_columns: docTableColumns,
       attach_excel: attachExcel,
       excel_columns: columns,
       attach_zip: attachZip
@@ -1638,9 +1642,10 @@ function onGroupingConfigChange(){
   amountField = document.getElementById("amountColumn").value;
 
   const zipHint = document.getElementById("zipDocsHint");
+  const letterChecked = document.getElementById("attachLetterDoc").checked;
   const zipChecked = document.getElementById("attachZipDocs").checked;
-  zipHint.textContent = (zipChecked && !templateB64)
-    ? "⚠ Upload a Word template in the Document Generation tab first — otherwise this attachment will be skipped."
+  zipHint.textContent = ((letterChecked || zipChecked) && !templateB64)
+    ? "⚠ Upload a Word template in the Document Generation tab first — otherwise the letter / zipped case documents attachment(s) will be skipped."
     : "";
 
   renderMoreTagOptions();
@@ -1727,10 +1732,12 @@ function buildCompanyDispatchPayload(group){
     save_sent_copy: document.getElementById("saveSentCopy").checked,
     imap: getImapConfig(),
     attach_table: document.getElementById("attachTableDoc").checked,
-    table_columns: tableColumns.length ? tableColumns : columns,
+    table_columns: tableColumns,
     attach_excel: document.getElementById("attachExcelFiltered").checked,
     excel_columns: columns,
     attach_zip: document.getElementById("attachZipDocs").checked && !!templateB64,
+    attach_letter: document.getElementById("attachLetterDoc").checked && !!templateB64,
+    tag_aggregates: docTagAggregates,
     template_b64: templateB64,
     doc_mapping: mapping,
     filename_field: document.getElementById("filenameField").value
@@ -1754,6 +1761,10 @@ async function startCompanyDispatch(){
   }
   if (document.getElementById("attachZipDocs").checked && !templateB64){
     showToast("Upload a Word template first, or turn off the zipped case documents attachment.");
+    return;
+  }
+  if (document.getElementById("attachLetterDoc").checked && !templateB64){
+    showToast("Upload a Word template first, or turn off the Merged Letter Document attachment.");
     return;
   }
 

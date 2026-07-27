@@ -1,0 +1,1263 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Mail Merge Automation | Document Generator</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Source+Serif+4:opsz,wght@8..60,400;8..60,600;8..60,700&family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@500;600&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --color-bg:#F3F5F8;
+    --color-surface:#FFFFFF;
+    --color-surface-alt:#F8F9FB;
+    --color-border:#E2E5EB;
+    --color-border-strong:#CBD1DB;
+    --color-ink:#142B4D;
+    --color-ink-700:#1E3A63;
+    --color-ink-100:#E9EEF5;
+    --color-text:#1A2233;
+    --color-text-muted:#5B6472;
+    --color-text-faint:#8A93A3;
+    --color-accent:#A6650E;
+    --color-accent-bg:#FBF1E1;
+    --color-success:#1F7A4D;
+    --color-success-700:#17603C;
+    --color-success-bg:#E7F5EC;
+    --font-display:'Source Serif 4', Georgia, serif;
+    --font-sans:'IBM Plex Sans','Segoe UI',system-ui,sans-serif;
+    --font-mono:'IBM Plex Mono',SFMono-Regular,Consolas,monospace;
+    --radius-sm:6px;
+    --radius-md:10px;
+    --radius-lg:14px;
+    --shadow-sm:0 1px 2px rgba(20,43,77,.06);
+    --shadow-md:0 8px 24px rgba(20,43,77,.10);
+  }
+
+  *{box-sizing:border-box;margin:0;padding:0;}
+
+  html{-webkit-font-smoothing:antialiased;}
+
+  body{
+    background:var(--color-bg);
+    color:var(--color-text);
+    font-family:var(--font-sans);
+    line-height:1.5;
+  }
+
+  .icon{width:18px;height:18px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round;flex-shrink:0;}
+  .icon-sm{width:13px;height:13px;stroke-width:2.2;}
+
+  .shell{max-width:1240px;margin:0 auto;padding:0 32px;}
+
+  /* ---------- Top bar ---------- */
+  .topbar{
+    position:sticky;top:0;z-index:100;
+    background:var(--color-surface);
+    border-bottom:1px solid var(--color-border);
+  }
+  .topbar-inner{
+    height:64px;display:flex;align-items:center;justify-content:space-between;
+  }
+  .brand{display:flex;align-items:center;gap:10px;}
+  .brand-mark{
+    width:34px;height:34px;border-radius:9px;background:var(--color-ink);
+    display:flex;align-items:center;justify-content:center;flex-shrink:0;
+  }
+  .brand-mark .icon{stroke:#fff;width:18px;height:18px;}
+  .brand-name{font-weight:700;font-size:17px;letter-spacing:-.01em;color:var(--color-ink);}
+  .brand-suffix{color:var(--color-text-faint);font-weight:500;font-size:12px;margin-left:2px;}
+
+  .steps{display:flex;align-items:center;gap:26px;list-style:none;font-size:13px;font-weight:600;}
+  .step{display:flex;align-items:center;gap:8px;color:var(--color-text-faint);}
+  .step-index{
+    width:20px;height:20px;border-radius:50%;display:flex;align-items:center;justify-content:center;
+    font-size:11px;background:var(--color-surface-alt);border:1px solid var(--color-border-strong);color:var(--color-text-faint);
+  }
+  .step.done{color:var(--color-text-muted);}
+  .step.done .step-index{background:var(--color-success-bg);border-color:transparent;color:var(--color-success-700);}
+  .step.active{color:var(--color-ink);}
+  .step.active .step-index{background:var(--color-ink);border-color:transparent;color:#fff;}
+  @media (max-width:760px){.steps{display:none;}}
+
+  /* ---------- Page ---------- */
+  .page{padding:32px 0 64px;}
+
+  .page-head{margin-bottom:24px;}
+  .page-head h1{
+    font-family:var(--font-display);font-weight:600;font-size:32px;letter-spacing:-.01em;color:var(--color-ink);
+  }
+  .page-sub{font-size:15px;color:var(--color-text-muted);margin-top:6px;max-width:620px;}
+
+  /* ---------- Tabs ---------- */
+  .tabs{display:flex;gap:0;border-bottom:1px solid var(--color-border);margin-bottom:28px;}
+  .tab-btn{
+    display:inline-flex;align-items:center;gap:8px;padding:12px 4px;margin-right:30px;
+    background:none;border:none;border-bottom:2px solid transparent;font-size:14px;font-weight:600;
+    color:var(--color-text-faint);cursor:pointer;font-family:inherit;transition:color .12s ease,border-color .12s ease;
+  }
+  .tab-btn .icon{width:16px;height:16px;}
+  .tab-btn:hover{color:var(--color-text-muted);}
+  .tab-btn.active{color:var(--color-ink);border-color:var(--color-ink);}
+  .tab-panel{display:none;}
+  .tab-panel.active{display:block;}
+
+  /* ---------- Upload cards ---------- */
+  .upload-section{
+    display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:18px;margin-bottom:28px;
+  }
+  .upload-card{
+    background:var(--color-surface);border:1px solid var(--color-border);border-radius:var(--radius-lg);
+    padding:20px 22px;display:flex;align-items:flex-start;gap:16px;box-shadow:var(--shadow-sm);
+    transition:box-shadow .15s ease, border-color .15s ease;
+  }
+  .upload-card:hover{box-shadow:var(--shadow-md);border-color:var(--color-border-strong);}
+  .upload-icon{
+    width:44px;height:44px;border-radius:var(--radius-md);background:var(--color-ink-100);color:var(--color-ink-700);
+    display:flex;align-items:center;justify-content:center;flex-shrink:0;
+  }
+  .upload-body{flex:1;min-width:0;}
+  .upload-eyebrow{font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--color-text-faint);margin-bottom:6px;}
+  .file-name{font-size:15px;font-weight:600;color:var(--color-text);word-break:break-word;}
+  .file-meta{font-size:12px;color:var(--color-text-muted);margin-top:2px;}
+  .upload-status{display:flex;flex-direction:column;align-items:flex-end;gap:8px;flex-shrink:0;}
+  .file-status{
+    display:inline-flex;align-items:center;gap:5px;background:var(--color-success-bg);color:var(--color-success-700);
+    font-size:12px;font-weight:700;padding:4px 10px;border-radius:999px;white-space:nowrap;
+  }
+  .link-btn{
+    background:none;border:none;color:var(--color-ink-700);font-size:12px;font-weight:600;cursor:pointer;
+    text-decoration:underline;text-underline-offset:2px;padding:0;font-family:inherit;
+  }
+  .link-btn:hover{color:var(--color-accent);}
+
+  /* ---------- Preview grid / panels ---------- */
+  .preview-grid{display:grid;grid-template-columns:1.3fr .9fr;gap:18px;margin-bottom:18px;}
+  @media (max-width:950px){.preview-grid{grid-template-columns:1fr;}}
+
+  .panel{
+    border:1px solid var(--color-border);border-radius:var(--radius-lg);padding:18px;
+    background:var(--color-surface-alt);min-width:0;width:100%;
+  }
+  .panel-header{
+    display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;
+    padding-bottom:12px;border-bottom:1px solid var(--color-border);
+  }
+  .panel-header h3{
+    font-size:14px;font-weight:700;color:var(--color-text);display:flex;align-items:center;gap:8px;
+  }
+  .panel-header .icon{color:var(--color-ink-700);}
+  .badge{
+    background:var(--color-ink-100);color:var(--color-ink-700);font-size:11px;font-weight:700;
+    padding:4px 10px;border-radius:999px;white-space:nowrap;
+  }
+
+  .table-scroll-container{
+    max-height:320px;width:100%;overflow:auto;border:1px solid var(--color-border);
+    border-radius:var(--radius-sm);background:var(--color-surface);
+  }
+  table{width:100%;border-collapse:collapse;font-size:13px;white-space:nowrap;}
+  th,td{border-bottom:1px solid var(--color-border);padding:10px 14px;text-align:left;}
+  th{
+    background:var(--color-ink);color:#fff;position:sticky;top:0;z-index:10;
+    font-weight:600;font-size:11px;text-transform:uppercase;letter-spacing:.04em;
+  }
+  tbody tr{cursor:pointer;transition:background .12s ease;}
+  tbody tr:nth-child(even){background:var(--color-surface-alt);}
+  tbody tr:hover{background:var(--color-ink-100) !important;}
+  tbody tr.active-row{
+    background:var(--color-accent-bg) !important;font-weight:600;
+    box-shadow:inset 3px 0 0 var(--color-accent);
+  }
+  .hint{color:var(--color-text-faint);font-size:11px;margin-top:8px;}
+
+  .mapping-scroll-container{max-height:320px;overflow-y:auto;padding-right:4px;}
+  .mapping-row{
+    display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:10px;
+    background:var(--color-surface);padding:10px 12px;border-radius:var(--radius-sm);
+    border:1px solid var(--color-border);box-shadow:var(--shadow-sm);
+  }
+  .mapping-field{display:flex;align-items:center;gap:8px;min-width:0;}
+  .mapping-row label{
+    font-weight:600;color:var(--color-ink-700);font-size:12px;font-family:var(--font-mono);
+    background:var(--color-ink-100);padding:4px 7px;border-radius:4px;white-space:nowrap;
+    overflow:hidden;text-overflow:ellipsis;max-width:150px;
+  }
+  .map-arrow{color:var(--color-text-faint);font-size:13px;flex-shrink:0;}
+
+  select{
+    padding:6px 10px;border-radius:6px;border:1px solid var(--color-border);background:#fff;
+    font-size:12px;outline:none;cursor:pointer;width:auto;min-width:120px;max-width:170px;color:var(--color-text);
+    font-family:inherit;
+  }
+  select:focus{border-color:var(--color-ink-700);box-shadow:0 0 0 3px var(--color-ink-100);}
+
+  ::-webkit-scrollbar{width:7px;height:7px;}
+  ::-webkit-scrollbar-track{background:transparent;}
+  ::-webkit-scrollbar-thumb{background:var(--color-border-strong);border-radius:4px;}
+  ::-webkit-scrollbar-thumb:hover{background:var(--color-text-faint);}
+
+  /* ---------- Live preview ---------- */
+  .preview-panel{margin-bottom:18px;}
+  .preview-controls{
+    display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;
+    flex-wrap:wrap;gap:10px;padding-bottom:12px;border-bottom:1px solid var(--color-border);
+  }
+  .row-selector{display:flex;align-items:center;gap:8px;font-size:12px;font-weight:600;color:var(--color-text-muted);}
+
+  .doc-preview{
+    background:#fff;border:1px solid var(--color-border);border-radius:var(--radius-md);
+    overflow:hidden;box-shadow:var(--shadow-sm);
+  }
+  .letterhead{background:var(--color-ink);color:#fff;padding:18px 44px;}
+  .letterhead-brand{font-family:var(--font-display);font-size:18px;font-weight:600;}
+  .letterhead-tag{font-size:11px;text-transform:uppercase;letter-spacing:.08em;opacity:.72;margin-top:2px;}
+  .letter-body{font-family:var(--font-display);font-size:15px;line-height:1.85;padding:36px 44px;color:var(--color-text);}
+  .letter-body p{margin-bottom:16px;}
+  .letter-sign{margin-top:8px;padding-top:16px;border-top:1px solid var(--color-border);}
+
+  .tag-highlight{
+    background:var(--color-accent-bg);border:1px solid rgba(166,101,14,.25);padding:2px 8px;
+    border-radius:4px;font-weight:700;color:var(--color-accent);
+  }
+
+  /* ---------- Actions ---------- */
+  .action-section{
+    text-align:center;border-top:1px solid var(--color-border);padding-top:26px;margin-top:8px;
+    display:flex;flex-direction:column;align-items:center;gap:18px;
+  }
+  .format-picker{display:flex;align-items:center;gap:14px;font-size:13px;font-weight:600;color:var(--color-text-muted);}
+  .segmented{display:inline-flex;border:1px solid var(--color-border);border-radius:8px;overflow:hidden;background:#fff;}
+  .segmented input{position:absolute;opacity:0;pointer-events:none;}
+  .segmented label{
+    padding:9px 18px;cursor:pointer;font-size:13px;font-weight:600;color:var(--color-text-muted);
+    transition:background .12s ease,color .12s ease;
+  }
+  .segmented label:first-of-type{border-right:1px solid var(--color-border);}
+  .segmented input:checked + label{background:var(--color-ink);color:#fff;}
+
+  .action-buttons{display:flex;gap:12px;flex-wrap:wrap;justify-content:center;}
+  .btn{
+    padding:12px 22px;font-size:14px;border:none;border-radius:8px;cursor:pointer;font-weight:600;
+    display:inline-flex;align-items:center;gap:8px;transition:transform .08s ease, box-shadow .15s ease, background .15s ease;
+    font-family:inherit;
+  }
+  .btn:active{transform:scale(.98);}
+  .btn-primary{background:var(--color-success);color:#fff;box-shadow:0 2px 8px rgba(31,122,77,.28);}
+  .btn-primary:hover{background:var(--color-success-700);}
+  .btn-secondary{background:#fff;color:var(--color-ink);border:1px solid var(--color-border-strong);}
+  .btn-secondary:hover{background:var(--color-ink-100);}
+
+  .disclaimer{
+    font-size:12px;color:var(--color-text-faint);text-align:center;max-width:560px;margin:4px auto 0;line-height:1.6;
+  }
+
+  @media (max-width:700px){
+    .shell{padding:0 18px;}
+    .page-head h1{font-size:24px;}
+    .letterhead,.letter-body{padding-left:24px;padding-right:24px;}
+    .action-buttons{width:100%;}
+    .action-buttons .btn{flex:1;justify-content:center;}
+  }
+
+  /* ---------- Bulk Email Dispatch ---------- */
+  .tag-insert-row{margin-bottom:16px;}
+  .tag-insert-label{font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--color-text-faint);display:block;margin-bottom:8px;}
+  .tag-chip-group{display:flex;flex-wrap:wrap;gap:8px;}
+  .tag-chip{
+    font-family:var(--font-mono);font-size:12px;font-weight:600;color:var(--color-ink-700);
+    background:var(--color-ink-100);border:1px solid transparent;padding:6px 10px;border-radius:6px;cursor:pointer;
+    transition:background .12s ease,color .12s ease;
+  }
+  .tag-chip:hover{background:var(--color-accent-bg);color:var(--color-accent);}
+  .tag-more-row{margin-top:10px;display:flex;align-items:center;gap:8px;}
+  .tag-more-select{max-width:260px;margin-bottom:0;font-family:var(--font-mono);}
+
+  .field-label{display:block;font-size:12px;font-weight:600;color:var(--color-text-muted);margin-bottom:6px;}
+  .field-hint{font-weight:400;color:var(--color-text-faint);text-transform:none;letter-spacing:0;}
+
+  .text-input{
+    width:100%;padding:9px 12px;border:1px solid var(--color-border);border-radius:var(--radius-sm);
+    font-size:13px;font-family:inherit;color:var(--color-text);background:#fff;margin-bottom:14px;
+  }
+  .text-input:focus{outline:none;border-color:var(--color-ink-700);box-shadow:0 0 0 3px var(--color-ink-100);}
+  select.text-input{cursor:pointer;}
+
+  .rte-toolbar{
+    display:flex;align-items:center;gap:2px;flex-wrap:wrap;border:1px solid var(--color-border);border-bottom:none;
+    border-radius:8px 8px 0 0;padding:6px 8px;background:var(--color-surface);
+  }
+  .rte-select{
+    border:1px solid transparent;background:transparent;font-size:12px;color:var(--color-text-muted);
+    padding:5px 6px;border-radius:5px;cursor:pointer;font-family:inherit;outline:none;
+  }
+  .rte-select:hover{background:var(--color-ink-100);}
+  .rte-divider{width:1px;height:20px;background:var(--color-border);margin:0 5px;flex-shrink:0;}
+  .rte-toolbar button{
+    width:28px;height:28px;border:1px solid transparent;border-radius:5px;background:transparent;cursor:pointer;
+    font-size:13px;color:var(--color-text-muted);font-family:inherit;display:inline-flex;align-items:center;justify-content:center;
+    flex-shrink:0;
+  }
+  .rte-toolbar button:hover{background:var(--color-ink-100);color:var(--color-ink);}
+  .rte-toolbar button .icon{width:16px;height:16px;}
+  .rte-color-btn{position:relative;font-weight:700;}
+  .rte-color-swatch{position:absolute;bottom:4px;left:6px;width:14px;height:3px;border-radius:1px;background:var(--color-accent);}
+  .rte-clear-btn{font-size:12px;font-weight:600;}
+  .rte-clear-btn sub{font-size:9px;}
+
+  .rte-body{
+    border:1px solid var(--color-border);border-radius:0 0 8px 8px;padding:14px 16px;min-height:120px;
+    font-size:14px;line-height:1.7;background:#fff;margin-bottom:14px;color:var(--color-text);
+  }
+  .rte-body:focus{outline:none;border-color:var(--color-ink-700);}
+  .rte-body p{margin-bottom:8px;}
+
+  .checkbox-row{display:flex;align-items:flex-start;gap:9px;font-size:13px;color:var(--color-text-muted);cursor:pointer;line-height:1.5;}
+  .checkbox-row input{margin-top:2px;accent-color:var(--color-ink);width:15px;height:15px;flex-shrink:0;}
+
+  .field-grid{display:grid;grid-template-columns:1fr 1fr;gap:14px;}
+  #customSmtpRow{display:none;}
+  @media (max-width:520px){.field-grid{grid-template-columns:1fr;}}
+
+  .status-stats{display:flex;gap:28px;margin-bottom:18px;flex-wrap:wrap;}
+  .stat{display:flex;flex-direction:column;gap:2px;}
+  .stat-value{font-family:var(--font-display);font-size:26px;font-weight:600;color:var(--color-ink);}
+  .stat-label{font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.05em;color:var(--color-text-faint);}
+  .stat-success .stat-value{color:var(--color-success-700);}
+  .stat-fail .stat-value{color:#B3261E;}
+
+  .progress-track{height:8px;background:var(--color-ink-100);border-radius:999px;overflow:hidden;margin-bottom:16px;}
+  .progress-fill{height:100%;background:var(--color-success);border-radius:999px;width:0%;transition:width .25s ease;}
+
+  .email-log{
+    max-height:180px;overflow-y:auto;background:var(--color-surface-alt);border:1px solid var(--color-border);
+    border-radius:var(--radius-sm);padding:10px 12px;font-family:var(--font-mono);font-size:12px;
+  }
+  .log-empty{color:var(--color-text-faint);font-family:var(--font-sans);}
+  .log-line{display:flex;justify-content:space-between;gap:10px;padding:5px 2px;border-bottom:1px dashed var(--color-border);color:var(--color-text-muted);}
+  .log-line:last-child{border-bottom:none;}
+  .log-status-ok{color:var(--color-success-700);font-weight:600;}
+  .log-status-fail{color:#B3261E;font-weight:600;}
+
+  .badge-sending{background:var(--color-accent-bg);color:var(--color-accent);}
+  .badge-fail{background:#FBE9E7;color:#B3261E;}
+  .upload-card:has(input:focus-visible){outline:2px solid var(--color-ink-700);outline-offset:2px;}
+  .badge-done{background:var(--color-success-bg);color:var(--color-success-700);}
+
+  /* ---------- Toast ---------- */
+  .toast{
+    display:none;position:fixed;bottom:25px;right:25px;background:var(--color-ink);color:#fff;
+    padding:12px 18px;border-radius:8px;font-size:13px;font-weight:500;box-shadow:var(--shadow-md);z-index:1000;
+    max-width:320px;
+  }
+</style>
+</head>
+<body>
+
+<!-- Icon sprite -->
+<svg style="display:none" aria-hidden="true">
+  <defs>
+    <symbol id="icon-merge" viewBox="0 0 24 24"><rect x="3" y="4" width="12" height="14" rx="2"></rect><rect x="9" y="8" width="12" height="14" rx="2" fill="none"></rect></symbol>
+    <symbol id="icon-sheet" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"></rect><line x1="3" y1="10" x2="21" y2="10"></line><line x1="3" y1="15" x2="21" y2="15"></line><line x1="9" y1="4" x2="9" y2="20"></line><line x1="15" y1="4" x2="15" y2="20"></line></symbol>
+    <symbol id="icon-doc" viewBox="0 0 24 24"><path d="M6 3h8l5 5v13a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1z"></path><path d="M14 3v5h5"></path><line x1="8" y1="13" x2="16" y2="13"></line><line x1="8" y1="17" x2="16" y2="17"></line></symbol>
+    <symbol id="icon-link" viewBox="0 0 24 24"><rect x="2.5" y="8" width="9" height="8" rx="4" transform="rotate(-40 7 12)"></rect><rect x="12.5" y="8" width="9" height="8" rx="4" transform="rotate(-40 17 12)"></rect></symbol>
+    <symbol id="icon-eye" viewBox="0 0 24 24"><path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7-11-7-11-7z"></path><circle cx="12" cy="12" r="3"></circle></symbol>
+    <symbol id="icon-check" viewBox="0 0 24 24"><polyline points="20 6 9 17 4 12"></polyline></symbol>
+    <symbol id="icon-download" viewBox="0 0 24 24"><path d="M12 3v12"></path><polyline points="7 11 12 16 17 11"></polyline><path d="M4 19h16"></path></symbol>
+    <symbol id="icon-send" viewBox="0 0 24 24"><line x1="22" y1="2" x2="11" y2="13"></line><polygon points="22 2 15 22 11 13 2 9 22 2"></polygon></symbol>
+    <symbol id="icon-mail" viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="14" rx="2"></rect><polyline points="3 7 12 13 21 7"></polyline></symbol>
+    <symbol id="icon-gear" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3.2"></circle><line x1="12" y1="2" x2="12" y2="6"></line><line x1="12" y1="18" x2="12" y2="22"></line><line x1="2" y1="12" x2="6" y2="12"></line><line x1="18" y1="12" x2="22" y2="12"></line><line x1="4.9" y1="4.9" x2="7.5" y2="7.5"></line><line x1="16.5" y1="16.5" x2="19.1" y2="19.1"></line><line x1="4.9" y1="19.1" x2="7.5" y2="16.5"></line><line x1="16.5" y1="7.5" x2="19.1" y2="4.9"></line></symbol>
+    <symbol id="icon-activity" viewBox="0 0 24 24"><polyline points="2 12 7 12 9.5 5 13.5 19 16 12 22 12"></polyline></symbol>
+    <symbol id="icon-align" viewBox="0 0 24 24"><line x1="4" y1="6" x2="20" y2="6"></line><line x1="4" y1="12" x2="14" y2="12"></line><line x1="4" y1="18" x2="18" y2="18"></line></symbol>
+    <symbol id="icon-list-bullet" viewBox="0 0 24 24"><circle cx="4" cy="6" r="1.4" fill="currentColor" stroke="none"></circle><line x1="9" y1="6" x2="21" y2="6"></line><circle cx="4" cy="12" r="1.4" fill="currentColor" stroke="none"></circle><line x1="9" y1="12" x2="21" y2="12"></line><circle cx="4" cy="18" r="1.4" fill="currentColor" stroke="none"></circle><line x1="9" y1="18" x2="21" y2="18"></line></symbol>
+    <symbol id="icon-list-number" viewBox="0 0 24 24"><text x="1.5" y="8.5" font-size="7" fill="currentColor" stroke="none">1</text><line x1="9" y1="6" x2="21" y2="6"></line><text x="1.5" y="14.5" font-size="7" fill="currentColor" stroke="none">2</text><line x1="9" y1="12" x2="21" y2="12"></line><text x="1.5" y="20.5" font-size="7" fill="currentColor" stroke="none">3</text><line x1="9" y1="18" x2="21" y2="18"></line></symbol>
+    <symbol id="icon-image" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"></rect><circle cx="8.5" cy="9.5" r="1.5" fill="currentColor" stroke="none"></circle><polyline points="21 15 15 9 5 20"></polyline></symbol>
+    <symbol id="icon-highlighter" viewBox="0 0 24 24"><path d="M4 20l3-1 9-9-2-2-9 9-1 3z"></path><line x1="14" y1="6" x2="18" y2="10"></line></symbol>
+  </defs>
+</svg>
+<main class="shell page">
+
+  <div class="page-head">
+    <h1 id="pageTitle">Mail Merge Automation</h1>
+    <p class="page-sub" id="pageSub">Upload your spreadsheet and Word template, map the fields, generate documents in bulk, and email them out — all in one place.</p>
+  </div>
+
+  <div class="tabs" role="tablist">
+    <button type="button" class="tab-btn active" data-tab="generate" onclick="switchTab('generate')" role="tab" aria-selected="true">
+      <svg class="icon"><use href="#icon-doc"></use></svg> Document Generation
+    </button>
+    <button type="button" class="tab-btn" data-tab="dispatch" onclick="switchTab('dispatch')" role="tab" aria-selected="false">
+      <svg class="icon"><use href="#icon-mail"></use></svg> Email Dispatch
+    </button>
+  </div>
+
+  <div class="tab-panel active" id="tab-generate">
+
+  <!-- 1. File Upload Area -->
+  <section class="upload-section">
+    <label class="upload-card" for="excelFileInput" style="cursor:pointer;" id="excelUploadCard">
+      <div class="upload-icon"><svg class="icon"><use href="#icon-sheet"></use></svg></div>
+      <div class="upload-body">
+        <p class="upload-eyebrow">Spreadsheet data</p>
+        <p class="file-name" id="excelFileName">Click to upload .xlsx / .xls / .csv</p>
+        <p class="file-meta" id="excelFileMeta">No file selected yet</p>
+      </div>
+      <div class="upload-status">
+        <span class="file-status" id="excelFileStatus" style="display:none;"><svg class="icon icon-sm"><use href="#icon-check"></use></svg> Uploaded</span>
+      </div>
+      <input type="file" id="excelFileInput" accept=".xlsx,.xls,.csv" style="display:none" onchange="handleExcelUpload(this.files[0])">
+    </label>
+
+    <label class="upload-card" for="templateFileInput" style="cursor:pointer;" id="templateUploadCard">
+      <div class="upload-icon"><svg class="icon"><use href="#icon-doc"></use></svg></div>
+      <div class="upload-body">
+        <p class="upload-eyebrow">Word template (.docx)</p>
+        <p class="file-name" id="templateFileName">Click to upload a .docx containing {{tags}}</p>
+        <p class="file-meta" id="templateFileMeta">No file selected yet</p>
+      </div>
+      <div class="upload-status">
+        <span class="file-status" id="templateFileStatus" style="display:none;"><svg class="icon icon-sm"><use href="#icon-check"></use></svg> Uploaded</span>
+      </div>
+      <input type="file" id="templateFileInput" accept=".docx" style="display:none" onchange="handleTemplateUpload(this.files[0])">
+    </label>
+  </section>
+
+  <!-- 2. Preview Grid Section -->
+  <section class="preview-grid">
+
+    <div class="panel">
+      <div class="panel-header">
+        <h3><svg class="icon"><use href="#icon-sheet"></use></svg> Spreadsheet Data</h3>
+        <span class="badge" id="dataBadge">0 columns</span>
+      </div>
+      <div class="table-scroll-container">
+        <table id="excelTable">
+          <thead><tr id="tableHeader"></tr></thead>
+          <tbody id="tableBody"></tbody>
+        </table>
+      </div>
+      <p class="hint">Click any row to preview its generated document below.</p>
+    </div>
+
+    <div class="panel">
+      <div class="panel-header">
+        <h3><svg class="icon"><use href="#icon-link"></use></svg> Field Mapping</h3>
+        <span class="badge" id="mappingBadge">0 fields mapped</span>
+      </div>
+      <div class="mapping-scroll-container" id="mappingContainer">
+        <p class="hint">Upload a spreadsheet and a Word template above — every {{tag}} found in the template will show up here for mapping.</p>
+      </div>
+    </div>
+
+  </section>
+
+  <!-- 3. Dynamic Live Document Preview -->
+  <section class="panel preview-panel">
+    <div class="preview-controls">
+      <h3 style="display:flex;align-items:center;gap:8px;font-size:14px;font-weight:700;">
+        <svg class="icon" style="color:var(--color-ink-700)"><use href="#icon-eye"></use></svg> Live Document Preview
+      </h3>
+      <div class="row-selector">
+        <label for="rowSelect">Viewing record</label>
+        <select id="rowSelect" onchange="renderPreview(parseInt(this.value))"></select>
+      </div>
+    </div>
+    <div class="doc-preview" id="docPreview"><p class="hint">Nothing to preview yet.</p></div>
+  </section>
+
+  <!-- 4. Action Buttons -->
+  <section class="action-section">
+    <div class="format-picker">
+      <span>Name generated files using</span>
+      <select id="filenameField" class="text-input" style="max-width:220px;"></select>
+    </div>
+
+    <div class="action-buttons">
+      <button class="btn btn-primary" id="generateBtn" onclick="generateDocuments()">
+        <svg class="icon icon-sm" style="stroke:#fff"><use href="#icon-send"></use></svg> <span id="generateBtnLabel">Generate All Documents</span>
+      </button>
+    </div>
+  </section>
+
+  <p class="disclaimer" id="genDisclaimer">Upload a spreadsheet and a Word template with {{tags}} to get started. Output is Word (.docx); merged files are bundled into a single ZIP download.</p>
+
+  </div><!-- /tab-generate -->
+
+  <div class="tab-panel" id="tab-dispatch">
+
+  <section class="preview-grid">
+
+    <!-- Email Template Designer -->
+    <div class="panel">
+      <div class="panel-header">
+        <h3><svg class="icon"><use href="#icon-mail"></use></svg> Email Template Designer</h3>
+        <span class="badge" id="emailTagBadge">0 columns available</span>
+      </div>
+
+      <div class="tag-insert-row">
+        <span class="tag-insert-label">Click to insert tag</span>
+        <div class="tag-more-row">
+          <select id="moreTagSelect" class="text-input tag-more-select" onchange="insertMoreTag()">
+            <option value="">+ Insert an Excel column…</option>
+          </select>
+        </div>
+      </div>
+
+      <label class="field-label" for="emailSubject">Subject line</label>
+      <input type="text" id="emailSubject" class="text-input" value="Update from {{Company}} – {{Full_Name}}" placeholder="e.g. Your Appointment Letter – {{Full_Name}}">
+
+      <label class="field-label" for="emailBody">Email body <span class="field-hint">(Word toolbar support)</span></label>
+      <div class="rte-toolbar">
+        <select class="rte-select" title="Font" onchange="execFormat('fontName', this.value)">
+          <option value="Arial, Helvetica, sans-serif">Arial</option>
+          <option value="Calibri, Candara, sans-serif">Calibri</option>
+          <option value="'Segoe UI', sans-serif">Segoe UI</option>
+          <option value="Tahoma, sans-serif">Tahoma</option>
+          <option value="Verdana, sans-serif">Verdana</option>
+          <option value="'Trebuchet MS', sans-serif">Trebuchet MS</option>
+          <option value="Georgia, serif">Georgia</option>
+          <option value="Cambria, serif">Cambria</option>
+          <option value="'Times New Roman', Times, serif">Times New Roman</option>
+          <option value="Garamond, serif">Garamond</option>
+          <option value="'Palatino Linotype', Palatino, serif">Palatino Linotype</option>
+          <option value="'Book Antiqua', serif">Book Antiqua</option>
+          <option value="'Courier New', Courier, monospace">Courier New</option>
+          <option value="'Lucida Console', Monaco, monospace">Lucida Console</option>
+          <option value="'Comic Sans MS', cursive">Comic Sans MS</option>
+        </select>
+        <select class="rte-select" title="Paragraph style" onchange="execFormat('formatBlock', this.value)">
+          <option value="p">Normal</option>
+          <option value="h2">Heading</option>
+          <option value="blockquote">Quote</option>
+        </select>
+        <span class="rte-divider"></span>
+        <button type="button" onclick="formatBody('bold')" title="Bold"><b>B</b></button>
+        <button type="button" onclick="formatBody('italic')" title="Italic"><i>I</i></button>
+        <button type="button" onclick="formatBody('underline')" title="Underline"><u>U</u></button>
+        <button type="button" onclick="formatBody('strikeThrough')" title="Strikethrough"><s>S</s></button>
+        <span class="rte-divider"></span>
+        <button type="button" onclick="applyTextColor()" title="Text colour" class="rte-color-btn">A<span class="rte-color-swatch"></span></button>
+        <button type="button" onclick="applyHighlight()" title="Highlight colour"><svg class="icon"><use href="#icon-highlighter"></use></svg></button>
+        <span class="rte-divider"></span>
+        <button type="button" onclick="formatBody('justifyLeft')" title="Align"><svg class="icon"><use href="#icon-align"></use></svg></button>
+        <button type="button" onclick="formatBody('insertUnorderedList')" title="Bulleted list"><svg class="icon"><use href="#icon-list-bullet"></use></svg></button>
+        <button type="button" onclick="formatBody('insertOrderedList')" title="Numbered list"><svg class="icon"><use href="#icon-list-number"></use></svg></button>
+        <span class="rte-divider"></span>
+        <button type="button" onclick="insertLink()" title="Insert link"><svg class="icon"><use href="#icon-link"></use></svg></button>
+        <button type="button" onclick="insertImagePrompt()" title="Insert image"><svg class="icon"><use href="#icon-image"></use></svg></button>
+        <button type="button" onclick="formatBody('removeFormat')" title="Clear formatting" class="rte-clear-btn">T<sub>x</sub></button>
+        <input type="color" id="textColorInput" value="#a6650e" style="display:none">
+        <input type="color" id="highlightColorInput" value="#fbf1e1" style="display:none">
+      </div>
+      <div id="emailBody" class="rte-body" contenteditable="true">
+        <p>Dear {{Full_Name}},</p>
+        <p>Please find the attached document.</p>
+        <p>Warm regards</p>
+      </div>
+
+      <label class="checkbox-row">
+        <input type="checkbox" id="attachDoc" checked>
+        <span>Automatically attach the merged Word document to each email</span>
+      </label>
+    </div>
+
+    <!-- Dispatch Settings -->
+    <div class="panel">
+      <div class="panel-header">
+        <h3><svg class="icon"><use href="#icon-gear"></use></svg> SMTP Configuration</h3>
+        <span class="badge">Sending</span>
+      </div>
+
+      <label class="field-label" for="recipientColumn">Recipient email column</label>
+      <select id="recipientColumn" class="text-input"></select>
+
+      <label class="field-label" for="smtpProvider">Email service provider</label>
+      <select id="smtpProvider" class="text-input" onchange="applyProviderPreset()">
+        <option value="gmail">Gmail SMTP</option>
+        <option value="outlook">Outlook / Office 365</option>
+        <option value="custom">Custom SMTP Server</option>
+      </select>
+
+      <div class="field-grid">
+        <div>
+          <label class="field-label" for="senderEmail">Sender email</label>
+          <input type="email" id="senderEmail" class="text-input" placeholder="hr@yourcompany.com">
+        </div>
+        <div>
+          <label class="field-label" for="appPassword">Password / app password</label>
+          <input type="password" id="appPassword" class="text-input" placeholder="••••••••••••">
+        </div>
+      </div>
+
+      <div class="field-grid">
+        <div>
+          <label class="field-label" for="senderName">Sender display name</label>
+          <input type="text" id="senderName" class="text-input" placeholder="HR Department">
+        </div>
+        <div>
+          <label class="field-label" for="smtpSecurity">Security</label>
+          <select id="smtpSecurity" class="text-input">
+            <option value="starttls">STARTTLS (port 587)</option>
+            <option value="ssl">SSL/TLS (port 465)</option>
+            <option value="none">None</option>
+          </select>
+        </div>
+      </div>
+
+      <div class="field-grid" id="customSmtpRow">
+        <div>
+          <label class="field-label" for="smtpHost">SMTP host</label>
+          <input type="text" id="smtpHost" class="text-input" placeholder="smtp.yourdomain.com">
+        </div>
+        <div>
+          <label class="field-label" for="smtpPort">Port</label>
+          <input type="text" id="smtpPort" class="text-input" placeholder="587">
+        </div>
+      </div>
+
+      <button type="button" class="link-btn" style="margin-top:6px;" onclick="testConnection('smtp')">Test SMTP connection</button>
+
+      <label class="checkbox-row" style="margin-top:16px;">
+        <input type="checkbox" id="saveSentCopy" onchange="toggleImapFields()">
+        <span>Save a copy of every sent email to the mailbox's <strong>Sent</strong> folder via IMAP (SMTP alone doesn't do this automatically)</span>
+      </label>
+
+      <div id="imapFields" style="display:none;margin-top:12px;">
+        <div class="field-grid">
+          <div>
+            <label class="field-label" for="imapHost">IMAP host</label>
+            <input type="text" id="imapHost" class="text-input" placeholder="imap.yourdomain.com">
+          </div>
+          <div>
+            <label class="field-label" for="imapPort">Port</label>
+            <input type="text" id="imapPort" class="text-input" placeholder="993" value="993">
+          </div>
+        </div>
+        <div class="field-grid">
+          <div>
+            <label class="field-label" for="imapUser">IMAP username</label>
+            <input type="text" id="imapUser" class="text-input" placeholder="Same as sender email, unless different">
+          </div>
+          <div>
+            <label class="field-label" for="imapPass">IMAP password</label>
+            <input type="password" id="imapPass" class="text-input" placeholder="••••••••••••">
+          </div>
+        </div>
+        <div class="field-grid">
+          <div>
+            <label class="field-label" for="imapFolder">Sent folder name</label>
+            <input type="text" id="imapFolder" class="text-input" placeholder="Sent" value="Sent">
+          </div>
+          <div>
+            <label class="field-label" for="imapSecurity">Security</label>
+            <select id="imapSecurity" class="text-input">
+              <option value="ssl">SSL/TLS (port 993)</option>
+              <option value="starttls">STARTTLS (port 143)</option>
+            </select>
+          </div>
+        </div>
+        <p class="hint">Common folder names: "Sent", "INBOX.Sent", "Sent Items". If the given name doesn't exist the server will try a few common alternates automatically.</p>
+        <button type="button" class="link-btn" onclick="testConnection('imap')">Test IMAP connection</button>
+      </div>
+
+      <p class="hint" style="margin-top:14px;">Credentials are only held in your browser and sent directly to your own backend for this dispatch — never stored on disk.</p>
+    </div>
+
+  </section>
+
+  <!-- Email Shot Status -->
+  <section class="panel" style="margin-bottom:8px;">
+    <div class="panel-header">
+      <h3><svg class="icon"><use href="#icon-activity"></use></svg> Email Shot Status</h3>
+      <span class="badge" id="statusBadge">Idle</span>
+    </div>
+
+    <div class="status-stats">
+      <div class="stat"><span class="stat-value" id="statTotal">0</span><span class="stat-label">Total emails</span></div>
+      <div class="stat stat-success"><span class="stat-value" id="statSent">0</span><span class="stat-label">Sent</span></div>
+      <div class="stat stat-fail"><span class="stat-value" id="statFailed">0</span><span class="stat-label">Failed</span></div>
+    </div>
+
+    <div class="progress-track"><div class="progress-fill" id="progressFill"></div></div>
+
+    <div class="email-log" id="emailLog">
+      <p class="log-empty">The dispatch log will appear here once sending starts.</p>
+    </div>
+
+    <div class="action-buttons" style="margin-top:18px;">
+      <button class="btn btn-secondary" onclick="sendTestEmail()">
+        <svg class="icon icon-sm"><use href="#icon-mail"></use></svg> Send Test Email
+      </button>
+      <button class="btn btn-secondary" onclick="downloadLogCSV()">
+        <svg class="icon icon-sm"><use href="#icon-download"></use></svg> Download Log (CSV)
+      </button>
+      <button class="btn btn-primary" id="dispatchBtn" onclick="startBulkDispatch()">
+        <svg class="icon icon-sm" style="stroke:#fff"><use href="#icon-send"></use></svg> Start Bulk Email Shot
+      </button>
+    </div>
+  </section>
+
+</div><!-- /tab-dispatch -->
+
+</main>
+
+<div class="toast" id="toastMsg"></div>
+
+<script>
+/* ==========================================================================
+   State
+   ========================================================================== */
+let excelData = [];          // array of row objects
+let columns = [];            // excel column names
+let templateTags = [];       // {{tag}} names found in the uploaded docx
+let templateB64 = null;      // base64 of the uploaded docx template
+let mapping = {};            // { tag: excelColumnName }
+let selectedRowIndex = 0;
+let sendLog = [];            // accumulated dispatch log (for CSV export)
+let dispatchRunning = false;
+
+const BATCH_SIZE = 12;       // rows per /api/send-emails call, avoids serverless timeouts
+
+/* ==========================================================================
+   Utilities
+   ========================================================================== */
+function escapeHtml(str){
+  return String(str ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+
+function showToast(msg){
+  const toast = document.getElementById("toastMsg");
+  toast.innerText = msg;
+  toast.style.display = "block";
+  setTimeout(() => { toast.style.display = "none"; }, 3500);
+}
+
+async function postJSON(url, body){
+  const res = await fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body)
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || `Request failed (${res.status})`);
+  return data;
+}
+
+async function downloadFilePost(url, body, fallbackName){
+  const res = await fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body)
+  });
+  if (!res.ok){
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.error || `Download failed (${res.status})`);
+  }
+  const blob = await res.blob();
+  const disposition = res.headers.get("Content-Disposition") || "";
+  const match = disposition.match(/filename="?([^"]+)"?/);
+  const filename = match ? match[1] : fallbackName;
+  const link = document.createElement("a");
+  link.href = URL.createObjectURL(blob);
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+}
+
+/* ==========================================================================
+   1. Spreadsheet upload
+   ========================================================================== */
+async function handleExcelUpload(file){
+  if (!file) return;
+  document.getElementById("excelFileName").textContent = file.name;
+  document.getElementById("excelFileMeta").textContent = "Uploading…";
+
+  const fd = new FormData();
+  fd.append("file", file);
+
+  try {
+    const res = await fetch("/api/upload-data", { method: "POST", body: fd });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || "Upload failed");
+
+    excelData = data.rows;
+    columns = data.columns;
+
+    document.getElementById("excelFileMeta").textContent = `${columns.length} columns · ${data.row_count} rows`;
+    document.getElementById("excelFileStatus").style.display = "inline-flex";
+    document.getElementById("dataBadge").textContent = `${columns.length} columns`;
+
+    renderTableHeader();
+    renderTableBody();
+    renderRecipientColumnOptions();
+    renderMoreTagOptions();
+    renderFilenameFieldOptions();
+    renderRowSelectorOptions();
+    if (excelData.length) selectRow(0);
+    refreshMappingAndPreviewState();
+    showToast(`Loaded ${data.row_count} rows from ${file.name}.`);
+  } catch (e) {
+    document.getElementById("excelFileMeta").textContent = "Upload failed — try again";
+    showToast(e.message);
+  }
+}
+
+function renderTableHeader(){
+  document.getElementById("tableHeader").innerHTML = columns.map(col => `<th>${escapeHtml(col)}</th>`).join('');
+}
+
+function renderTableBody(){
+  document.getElementById("tableBody").innerHTML = excelData.map((row, idx) => `
+    <tr id="row-${idx}" onclick="selectRow(${idx})">
+      ${columns.map(col => `<td>${escapeHtml(row[col])}</td>`).join('')}
+    </tr>
+  `).join('');
+}
+
+function renderRowSelectorOptions(){
+  const labelCol = columns.find(c => /name/i.test(c)) || columns[0];
+  document.getElementById("rowSelect").innerHTML = excelData.map((row, idx) =>
+    `<option value="${idx}">Row ${idx + 1}${labelCol ? ': ' + escapeHtml(row[labelCol]) : ''}</option>`
+  ).join('');
+}
+
+function renderFilenameFieldOptions(){
+  const sel = document.getElementById("filenameField");
+  sel.innerHTML = columns.map(col => `<option value="${escapeHtml(col)}">${escapeHtml(col)}</option>`).join('');
+}
+
+function selectRow(idx){
+  selectedRowIndex = idx;
+  const rowSelect = document.getElementById("rowSelect");
+  if (rowSelect) rowSelect.value = idx;
+  excelData.forEach((_, i) => {
+    const tr = document.getElementById(`row-${i}`);
+    if (tr) tr.classList.toggle("active-row", i === idx);
+  });
+  renderPreview(idx);
+}
+
+/* ==========================================================================
+   2. Word template upload
+   ========================================================================== */
+async function handleTemplateUpload(file){
+  if (!file) return;
+  document.getElementById("templateFileName").textContent = file.name;
+  document.getElementById("templateFileMeta").textContent = "Reading template…";
+
+  const fd = new FormData();
+  fd.append("file", file);
+
+  try {
+    const res = await fetch("/api/upload-template", { method: "POST", body: fd });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || "Upload failed");
+
+    templateTags = data.tags;
+    templateB64 = data.template_b64;
+    mapping = {};
+
+    document.getElementById("templateFileMeta").textContent = `${templateTags.length} dynamic tags found`;
+    document.getElementById("templateFileStatus").style.display = "inline-flex";
+
+    renderMappingRows();
+    refreshMappingAndPreviewState();
+    showToast(`Found ${templateTags.length} tag(s) in ${file.name}.`);
+  } catch (e) {
+    document.getElementById("templateFileMeta").textContent = "Upload failed — try again";
+    showToast(e.message);
+  }
+}
+
+function renderMappingRows(){
+  const container = document.getElementById("mappingContainer");
+  if (!templateTags.length || !columns.length){
+    container.innerHTML = `<p class="hint">Upload a spreadsheet and a Word template above — every {{tag}} found in the template will show up here for mapping.</p>`;
+    document.getElementById("mappingBadge").textContent = "0 fields mapped";
+    return;
+  }
+
+  container.innerHTML = templateTags.map(tag => {
+    const guess = mapping[tag] || columns.find(c => c.toLowerCase() === tag.toLowerCase()) || columns[0];
+    mapping[tag] = guess;
+    return `
+    <div class="mapping-row">
+      <div class="mapping-field">
+        <label title="{{${escapeHtml(tag)}}}">{{${escapeHtml(tag)}}}</label>
+        <span class="map-arrow">→</span>
+      </div>
+      <select id="map-${escapeHtml(tag)}" onchange="onMappingChange('${tag.replace(/'/g,"\\'")}', this.value)">
+        ${columns.map(col => `<option value="${escapeHtml(col)}" ${col === guess ? 'selected' : ''}>${escapeHtml(col)}</option>`).join('')}
+      </select>
+    </div>`;
+  }).join('');
+
+  document.getElementById("mappingBadge").textContent = `${templateTags.length} fields mapped`;
+}
+
+function onMappingChange(tag, col){
+  mapping[tag] = col;
+  renderPreview(selectedRowIndex);
+}
+
+function refreshMappingAndPreviewState(){
+  const ready = templateTags.length > 0 && excelData.length > 0;
+  document.getElementById("generateBtn").disabled = !ready;
+  document.getElementById("generateBtn").style.opacity = ready ? "1" : ".55";
+  document.getElementById("generateBtnLabel").textContent = ready
+    ? `Generate All ${excelData.length} Documents`
+    : "Generate All Documents";
+  if (ready) renderPreview(selectedRowIndex);
+}
+
+/* ==========================================================================
+   3. Live preview
+   ========================================================================== */
+function renderPreview(idx){
+  selectedRowIndex = idx;
+  excelData.forEach((_, i) => {
+    const tr = document.getElementById(`row-${i}`);
+    if (tr) tr.classList.toggle("active-row", i === idx);
+  });
+
+  const preview = document.getElementById("docPreview");
+  if (!templateTags.length || !excelData[idx]){
+    preview.innerHTML = `<p class="hint">Upload data + a template to see a live preview.</p>`;
+    return;
+  }
+
+  const row = excelData[idx];
+  const fields = templateTags.map(tag => {
+    const col = mapping[tag];
+    const val = col ? row[col] : '';
+    return `<p><strong>${escapeHtml(tag)}:</strong> <span class="tag-highlight">${escapeHtml(val)}</span></p>`;
+  }).join('');
+
+  preview.innerHTML = `
+    <div class="letterhead">
+      <div class="letterhead-brand">Document Preview</div>
+      <div class="letterhead-tag">Fields as they will be merged into the template</div>
+    </div>
+    <div class="letter-body">${fields}</div>
+  `;
+}
+
+/* ==========================================================================
+   4. Generate documents (ZIP download)
+   ========================================================================== */
+async function generateDocuments(){
+  if (!templateB64 || !excelData.length){
+    showToast("Upload both a spreadsheet and a template first.");
+    return;
+  }
+  const btn = document.getElementById("generateBtn");
+  btn.disabled = true;
+  btn.style.opacity = ".7";
+  showToast(`Generating ${excelData.length} document(s)…`);
+
+  try {
+    await downloadFilePost("/api/generate", {
+      template_b64: templateB64,
+      mapping: mapping,
+      rows: excelData,
+      filename_field: document.getElementById("filenameField").value
+    }, "merged_documents.zip");
+    showToast("ZIP file download started.");
+  } catch (e) {
+    showToast(e.message);
+  } finally {
+    btn.disabled = false;
+    btn.style.opacity = "1";
+  }
+}
+
+/* ==========================================================================
+   Email Dispatch tab
+   ========================================================================== */
+function renderRecipientColumnOptions(){
+  const sel = document.getElementById("recipientColumn");
+  const guess = columns.find(c => /e[-_]?mail/i.test(c)) || columns[0];
+  sel.innerHTML = columns.map(col =>
+    `<option value="${escapeHtml(col)}" ${col === guess ? 'selected' : ''}>${escapeHtml(col)}</option>`
+  ).join('');
+}
+
+function renderMoreTagOptions(){
+  const sel = document.getElementById("moreTagSelect");
+  sel.innerHTML = '<option value="">+ Insert an Excel column…</option>' +
+    columns.map(col => `<option value="{{${col}}}">{{${col}}}</option>`).join('');
+  document.getElementById("emailTagBadge").textContent = `${columns.length} columns available`;
+}
+
+function insertMoreTag(){
+  const sel = document.getElementById("moreTagSelect");
+  if (!sel.value) return;
+  insertTag(sel.value);
+  sel.value = "";
+}
+
+function insertTag(tag){
+  const body = document.getElementById("emailBody");
+  body.focus();
+  document.execCommand("insertText", false, tag);
+}
+
+function applyProviderPreset(){
+  const provider = document.getElementById("smtpProvider").value;
+  const hostEl = document.getElementById("smtpHost");
+  const portEl = document.getElementById("smtpPort");
+  const secEl = document.getElementById("smtpSecurity");
+  const customRow = document.getElementById("customSmtpRow");
+
+  if (provider === "gmail"){
+    hostEl.value = "smtp.gmail.com"; portEl.value = "587"; secEl.value = "starttls";
+  } else if (provider === "outlook"){
+    hostEl.value = "smtp.office365.com"; portEl.value = "587"; secEl.value = "starttls";
+  }
+  customRow.style.display = provider === "custom" ? "grid" : "grid";
+}
+
+function toggleImapFields(){
+  document.getElementById("imapFields").style.display = document.getElementById("saveSentCopy").checked ? "block" : "none";
+}
+
+function formatBody(cmd){
+  document.getElementById("emailBody").focus();
+  document.execCommand(cmd, false, null);
+}
+
+function execFormat(cmd, value){
+  document.getElementById("emailBody").focus();
+  document.execCommand(cmd, false, value);
+}
+
+function applyTextColor(){
+  const body = document.getElementById("emailBody");
+  body.focus();
+  const input = document.getElementById("textColorInput");
+  input.onchange = () => { document.execCommand("foreColor", false, input.value); };
+  input.click();
+}
+
+function applyHighlight(){
+  const body = document.getElementById("emailBody");
+  body.focus();
+  const input = document.getElementById("highlightColorInput");
+  input.onchange = () => { document.execCommand("hiliteColor", false, input.value); };
+  input.click();
+}
+
+function insertLink(){
+  const url = prompt("Enter the link URL:", "https://");
+  if (url){
+    document.getElementById("emailBody").focus();
+    document.execCommand("createLink", false, url);
+  }
+}
+
+function insertImagePrompt(){
+  const url = prompt("Enter the image URL:", "https://");
+  if (url){
+    document.getElementById("emailBody").focus();
+    document.execCommand("insertImage", false, url);
+  }
+}
+
+function getSmtpConfig(){
+  return {
+    host: document.getElementById("smtpHost").value.trim(),
+    port: document.getElementById("smtpPort").value.trim() || "587",
+    username: document.getElementById("senderEmail").value.trim(),
+    password: document.getElementById("appPassword").value,
+    security: document.getElementById("smtpSecurity").value
+  };
+}
+
+function getImapConfig(){
+  return {
+    host: document.getElementById("imapHost").value.trim(),
+    port: document.getElementById("imapPort").value.trim() || "993",
+    username: document.getElementById("imapUser").value.trim() || document.getElementById("senderEmail").value.trim(),
+    password: document.getElementById("imapPass").value,
+    folder: document.getElementById("imapFolder").value.trim() || "Sent",
+    security: document.getElementById("imapSecurity").value
+  };
+}
+
+async function testConnection(type){
+  showToast(`Testing ${type.toUpperCase()} connection…`);
+  try {
+    const config = type === "smtp" ? getSmtpConfig() : getImapConfig();
+    const data = await postJSON("/api/test-connection", { type, config });
+    showToast(data.ok ? `${type.toUpperCase()} connection successful.` : `${type.toUpperCase()} failed: ${data.error}`);
+  } catch (e) {
+    showToast(e.message);
+  }
+}
+
+async function sendTestEmail(){
+  if (!excelData.length){
+    showToast("Upload spreadsheet data first.");
+    return;
+  }
+  const testAddress = prompt("Send a test email to:", document.getElementById("senderEmail").value || "");
+  if (!testAddress) return;
+
+  const recipientField = document.getElementById("recipientColumn").value;
+  const row = { ...excelData[selectedRowIndex], [recipientField]: testAddress };
+
+  try {
+    const payload = buildDispatchPayload([row], recipientField);
+    const data = await postJSON("/api/send-emails", payload);
+    const entry = data.log[0];
+    showToast(entry && entry.status === "sent" ? `Test email sent to ${testAddress}.` : `Test email failed: ${entry ? entry.error : "unknown error"}`);
+  } catch (e) {
+    showToast(e.message);
+  }
+}
+
+function buildDispatchPayload(rows, recipientField){
+  return {
+    smtp: getSmtpConfig(),
+    from_name: document.getElementById("senderName").value.trim(),
+    from_email: document.getElementById("senderEmail").value.trim(),
+    subject: document.getElementById("emailSubject").value,
+    body: document.getElementById("emailBody").innerHTML,
+    recipient_field: recipientField,
+    rows: rows,
+    save_sent_copy: document.getElementById("saveSentCopy").checked,
+    imap: getImapConfig(),
+    attach_document: document.getElementById("attachDoc").checked,
+    template_b64: templateB64,
+    doc_mapping: mapping,
+    filename_field: document.getElementById("filenameField").value
+  };
+}
+
+function setStatusBadge(text, cls){
+  const badge = document.getElementById("statusBadge");
+  badge.textContent = text;
+  badge.className = "badge " + cls;
+}
+
+function appendLogLine(entry){
+  const logEl = document.getElementById("emailLog");
+  if (logEl.querySelector(".log-empty")) logEl.innerHTML = "";
+  const line = document.createElement("div");
+  line.className = "log-line";
+  const ok = entry.status === "sent";
+  const copyNote = entry.sent_copy_saved === true ? " · copy saved" : (entry.sent_copy_saved === false ? " · copy failed" : "");
+  line.innerHTML = `<span>${escapeHtml(entry.recipient)}</span><span class="${ok ? 'log-status-ok' : 'log-status-fail'}">${ok ? 'Sent' + copyNote : 'Failed: ' + escapeHtml(entry.error || 'error')}</span>`;
+  logEl.prepend(line);
+}
+
+async function startBulkDispatch(){
+  if (dispatchRunning) return;
+  if (!excelData.length){
+    showToast("Upload spreadsheet data first.");
+    return;
+  }
+  const smtp = getSmtpConfig();
+  if (!smtp.host || !smtp.username){
+    showToast("Fill in the SMTP host and sender email first.");
+    return;
+  }
+  if (document.getElementById("attachDoc").checked && !templateB64){
+    showToast("Upload a Word template first, or turn off document attachment.");
+    return;
+  }
+
+  dispatchRunning = true;
+  sendLog = [];
+  const recipientField = document.getElementById("recipientColumn").value;
+  const total = excelData.length;
+
+  document.getElementById("emailLog").innerHTML = "";
+  document.getElementById("statTotal").textContent = total;
+  document.getElementById("statSent").textContent = "0";
+  document.getElementById("statFailed").textContent = "0";
+  document.getElementById("progressFill").style.width = "0%";
+  setStatusBadge("Sending…", "badge-sending");
+
+  const dispatchBtn = document.getElementById("dispatchBtn");
+  dispatchBtn.disabled = true;
+  dispatchBtn.style.opacity = ".7";
+
+  let sent = 0, failed = 0, processed = 0;
+
+  try {
+    for (let i = 0; i < excelData.length; i += BATCH_SIZE){
+      const batch = excelData.slice(i, i + BATCH_SIZE);
+      const payload = buildDispatchPayload(batch, recipientField);
+      const data = await postJSON("/api/send-emails", payload);
+
+      data.log.forEach(entry => {
+        sendLog.push(entry);
+        appendLogLine(entry);
+        if (entry.status === "sent") sent++; else failed++;
+        processed++;
+      });
+
+      document.getElementById("statSent").textContent = sent;
+      document.getElementById("statFailed").textContent = failed;
+      document.getElementById("progressFill").style.width = Math.round((processed / total) * 100) + "%";
+    }
+    setStatusBadge("Completed", "badge-done");
+    showToast(`Bulk email dispatch completed: ${sent}/${total} sent${failed ? `, ${failed} failed` : ""}.`);
+  } catch (e) {
+    setStatusBadge("Error", "badge-fail");
+    showToast(`Dispatch stopped: ${e.message}`);
+  } finally {
+    dispatchRunning = false;
+    dispatchBtn.disabled = false;
+    dispatchBtn.style.opacity = "1";
+  }
+}
+
+function downloadLogCSV(){
+  if (!sendLog.length){
+    showToast("No dispatch log yet — send some emails first.");
+    return;
+  }
+  const headers = ["timestamp","recipient","subject","status","sent_copy_saved","error"];
+  const rows = sendLog.map(e => headers.map(h => `"${String(e[h] ?? '').replace(/"/g,'""')}"`).join(","));
+  const csv = [headers.join(","), ...rows].join("\r\n");
+  const blob = new Blob(["\ufeff" + csv], { type: "text/csv;charset=utf-8;" });
+  const link = document.createElement("a");
+  link.href = URL.createObjectURL(blob);
+  link.download = `send_log_${new Date().toISOString().slice(0,19).replace(/[:T]/g,'-')}.csv`;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+}
+
+/* ==========================================================================
+   Tabs
+   ========================================================================== */
+function switchTab(tab){
+  document.querySelectorAll(".tab-btn").forEach(b => {
+    const active = b.dataset.tab === tab;
+    b.classList.toggle("active", active);
+    b.setAttribute("aria-selected", active ? "true" : "false");
+  });
+  document.getElementById("tab-generate").classList.toggle("active", tab === "generate");
+  document.getElementById("tab-dispatch").classList.toggle("active", tab === "dispatch");
+
+  if (tab === "generate"){
+    document.getElementById("pageTitle").textContent = "Mail Merge Automation";
+    document.getElementById("pageSub").textContent = "Upload your spreadsheet and Word template, map the fields, generate documents in bulk, and email them out — all in one place.";
+  } else {
+    document.getElementById("pageTitle").textContent = "Bulk Email Dispatch";
+    document.getElementById("pageSub").textContent = "Send the merged documents straight to each recipient's inbox, with a live delivery log and SMTP configuration.";
+  }
+}
+
+window.onload = function(){
+  applyProviderPreset();
+  toggleImapFields();
+};
+</script>
+</body>
+</html>

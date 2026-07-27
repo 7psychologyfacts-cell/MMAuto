@@ -37,8 +37,10 @@ from email.utils import formataddr, make_msgid
 
 import pandas as pd
 from docx import Document
+from docx.enum.section import WD_ORIENT
 from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
+from docx.shared import Cm, Pt
 from flask import Flask, jsonify, request, send_file, send_from_directory
 
 app = Flask(__name__, static_folder=None)
@@ -60,13 +62,101 @@ def index():
 # --------------------------------------------------------------------------
 # Helpers
 # --------------------------------------------------------------------------
-def df_to_records(df: pd.DataFrame):
-    """Convert a dataframe to plain-JSON-safe list[dict], NaN -> ''."""
-    df = df.fillna("")
-    # Force everything to string-safe python types (avoids numpy int64 etc.)
+def infer_column_types(df: pd.DataFrame) -> dict:
+    """Classify every column as 'number', 'date', or 'text'. This is what lets
+    us later write real numbers/dates into the generated Excel and Word
+    output instead of the plain-text strings that caused numbers and dates
+    to show up left-aligned as text in the mail-merge attachments."""
+    types = {}
+    for col in df.columns:
+        s = df[col]
+        if pd.api.types.is_datetime64_any_dtype(s):
+            types[col] = "date"
+            continue
+        if pd.api.types.is_numeric_dtype(s):
+            types[col] = "number"
+            continue
+
+        non_null = s.dropna().astype(str).str.strip()
+        non_null = non_null[non_null != ""]
+        if len(non_null) == 0:
+            types[col] = "text"
+            continue
+
+        as_num = pd.to_numeric(non_null, errors="coerce")
+        if as_num.notna().mean() >= 0.9:
+            types[col] = "number"
+            continue
+
+        as_date = pd.to_datetime(non_null, errors="coerce")
+        if as_date.notna().mean() >= 0.9:
+            types[col] = "date"
+            continue
+
+        types[col] = "text"
+    return types
+
+
+def format_cell_value(value, col_type: str = None) -> str:
+    """Render a raw cell value for display in a generated Word doc/table.
+    Prevents dates rendering as '2026-05-29 00:00:00' and numbers rendering
+    as raw floats with long decimal tails."""
+    if value is None or value == "":
+        return ""
+    if col_type == "date":
+        try:
+            ts = pd.to_datetime(value)
+            if pd.isna(ts):
+                return str(value)
+            return ts.strftime("%d-%b-%Y")
+        except Exception:
+            return str(value)
+    if col_type == "number":
+        try:
+            f = float(str(value).replace(",", "").strip())
+            if f == int(f):
+                return f"{int(f):,}"
+            return f"{f:,.2f}"
+        except (TypeError, ValueError):
+            return str(value)
+    return str(value)
+
+
+def df_to_records(df: pd.DataFrame, column_types: dict = None):
+    """Convert a dataframe to plain-JSON-safe list[dict].
+
+    Unlike a blanket str(v) on every cell (which is what silently turned
+    numbers and dates into plain text later on), this keeps number columns
+    as real JSON numbers and date columns as bare 'YYYY-MM-DD' strings (no
+    time-of-day) so the browser -> backend round trip preserves the type,
+    and Excel/Word generation can format them properly instead of stamping
+    them out as text.
+    """
+    column_types = column_types or {}
     records = []
     for _, row in df.iterrows():
-        records.append({str(col): ("" if pd.isna(v) else str(v)) for col, v in row.items()})
+        rec = {}
+        for col, v in row.items():
+            col = str(col)
+            if pd.isna(v) or v == "":
+                rec[col] = ""
+                continue
+            ctype = column_types.get(col)
+            if ctype == "number":
+                try:
+                    f = float(v)
+                    rec[col] = int(f) if float(f).is_integer() else f
+                except (TypeError, ValueError):
+                    rec[col] = str(v)
+            elif ctype == "date":
+                try:
+                    ts = pd.to_datetime(v)
+                    rec[col] = ts.strftime("%Y-%m-%d") if not pd.isna(ts) else str(v)
+                except Exception:
+                    rec[col] = str(v)
+            else:
+                rec[col] = str(v)
+        records.append(rec)
     return records
 
 
@@ -140,15 +230,18 @@ def fill_template(template_bytes: bytes, mapping: dict) -> bytes:
     return out.getvalue()
 
 
-def merge_text(template_str: str, row: dict) -> str:
+def merge_text(template_str: str, row: dict, column_types: dict = None) -> str:
     """Substitute {{ColumnName}} directly against an excel row (used for
     email subject/body, which use the raw excel column names as tags)."""
     if not template_str:
         return ""
+    column_types = column_types or {}
 
     def sub(m):
         key = m.group(1)
-        return str(row.get(key, m.group(0)))
+        if key not in row:
+            return m.group(0)
+        return format_cell_value(row.get(key), column_types.get(key))
 
     return TAG_PATTERN.sub(sub, template_str)
 
@@ -158,15 +251,29 @@ def safe_filename(name: str) -> str:
     return name or "document"
 
 
-def build_case_zip(template_bytes: bytes, rows: list, doc_mapping: dict, filename_field: str, default_prefix: str = "case") -> bytes:
+def tagify(name: str) -> str:
+    """Turn an arbitrary column name into a valid {{tag}} identifier (only
+    letters/digits/underscore/dot/dash, per TAG_PATTERN). Column names in
+    real spreadsheets very often contain spaces or punctuation (e.g. 'Bill
+    Amt'), which can't appear inside a literal {{tag}} — this lets aggregate
+    tags like {{Total_Bill_Amt}} still work off of such columns."""
+    safe = re.sub(r"[^A-Za-z0-9_.\-]+", "_", str(name)).strip("_")
+    return safe or "Field"
+
+
+def build_case_zip(template_bytes: bytes, rows: list, doc_mapping: dict, filename_field: str, default_prefix: str = "case", column_types: dict = None) -> bytes:
     """Merge the Word template against every row and bundle the results into
     a single ZIP (used both by /api/generate and the company-wise 'zipped
     individual case documents' attachment)."""
+    column_types = column_types or {}
     zip_buffer = io.BytesIO()
     with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zf:
         used_names = set()
         for i, row in enumerate(rows, start=1):
-            row_mapping = {tag: row.get(col, "") for tag, col in doc_mapping.items()}
+            row_mapping = {
+                tag: format_cell_value(row.get(col, ""), column_types.get(col))
+                for tag, col in doc_mapping.items()
+            }
             doc_bytes = fill_template(template_bytes, row_mapping)
 
             base_name = safe_filename(row.get(filename_field, "")) if filename_field else f"{default_prefix}_{i}"
@@ -183,16 +290,41 @@ def build_case_zip(template_bytes: bytes, rows: list, doc_mapping: dict, filenam
     return zip_buffer.getvalue()
 
 
-def build_filtered_excel(rows: list, columns: list) -> bytes:
+def build_filtered_excel(rows: list, columns: list, column_types: dict = None) -> bytes:
     """Build a .xlsx containing only the given rows/columns (a single
-    company's cases) — the 'Filtered Excel' company-wise attachment."""
+    company's cases) — the 'Filtered Excel' company-wise attachment.
+
+    Number and date columns are coerced back to real dtypes and given an
+    explicit Excel number format, instead of being written as plain text
+    (which is what made every number/date show up left-aligned as text in
+    the mailed attachment)."""
+    column_types = column_types or {}
     df = pd.DataFrame(rows)
     cols = [c for c in columns if c in df.columns] or list(df.columns)
     df = df[cols]
 
+    for col in cols:
+        ctype = column_types.get(col)
+        if ctype == "number":
+            df[col] = pd.to_numeric(
+                df[col].astype(str).str.replace(",", "", regex=False).replace("", pd.NA),
+                errors="coerce",
+            )
+        elif ctype == "date":
+            df[col] = pd.to_datetime(df[col].replace("", pd.NaT), errors="coerce")
+
     out = io.BytesIO()
     with pd.ExcelWriter(out, engine="openpyxl") as writer:
         df.to_excel(writer, index=False, sheet_name="Cases")
+        ws = writer.sheets["Cases"]
+        for idx, col in enumerate(cols, start=1):
+            ctype = column_types.get(col)
+            if ctype not in ("number", "date"):
+                continue
+            number_format = "#,##0.00" if ctype == "number" else "dd-mmm-yyyy"
+            for row_cells in ws.iter_rows(min_row=2, min_col=idx, max_col=idx):
+                for cell in row_cells:
+                    cell.number_format = number_format
     return out.getvalue()
 
 
@@ -210,54 +342,107 @@ def _repeat_header_row(row):
     trPr.append(header)
 
 
-def build_table_docx(group_label: str, rows: list, columns: list) -> bytes:
+def build_table_docx(group_label: str, rows: list, columns: list, column_types: dict = None) -> bytes:
     """Build a .docx with a single aligned, bordered table listing every case
-    for one company — the 'Summary Table Document' company-wise attachment."""
+    for one company — the 'Summary Table Document' company-wise attachment.
+
+    Real-world case files often have 15-25+ columns; left at Word's default
+    "autofit to window" behaviour in a portrait page, that many columns get
+    squeezed unreadably narrow and the table looks broken. For wide tables
+    this switches the page to landscape with slim margins, fixes the table
+    layout, and gives every column an explicit equal share of the page width
+    (plus a smaller font) so it actually renders as an aligned table."""
+    column_types = column_types or {}
     doc = Document()
+
+    cols = columns or (list(rows[0].keys()) if rows else [])
+    n_cols = max(len(cols), 1)
+    wide = n_cols > 6
+
+    section = doc.sections[0]
+    if wide:
+        section.orientation = WD_ORIENT.LANDSCAPE
+        section.page_width, section.page_height = section.page_height, section.page_width
+        section.top_margin = Cm(1.2)
+        section.bottom_margin = Cm(1.2)
+        section.left_margin = Cm(1.0)
+        section.right_margin = Cm(1.0)
 
     doc.add_heading(f"Case Summary — {group_label}", level=1)
     sub = doc.add_paragraph(f"Total cases: {len(rows)}")
     if sub.runs:
         sub.runs[0].italic = True
 
-    cols = columns or (list(rows[0].keys()) if rows else [])
-    table = doc.add_table(rows=1, cols=max(len(cols), 1))
+    table = doc.add_table(rows=1, cols=n_cols)
     table.style = "Table Grid"
+    table.autofit = False
+
+    # Force a fixed column layout — Word otherwise ignores explicit column
+    # widths on tables and re-autofits them to content, which is what broke
+    # the alignment on wide tables.
+    tbl_pr = table._tbl.tblPr
+    layout = OxmlElement("w:tblLayout")
+    layout.set(qn("w:type"), "fixed")
+    tbl_pr.append(layout)
+
+    usable_width = section.page_width - section.left_margin - section.right_margin
+    col_width = int(usable_width / n_cols)
+    font_size = Pt(9) if n_cols <= 10 else (Pt(8) if n_cols <= 16 else Pt(7))
+
+    for col_obj in table.columns:
+        col_obj.width = col_width
 
     hdr_cells = table.rows[0].cells
     for i, col in enumerate(cols):
+        hdr_cells[i].width = col_width
         hdr_cells[i].text = str(col)
         for p in hdr_cells[i].paragraphs:
             for r in p.runs:
                 r.bold = True
+                r.font.size = font_size
         _shade_cell(hdr_cells[i], "D9E2F3")
     _repeat_header_row(table.rows[0])
 
     for row in rows:
         cells = table.add_row().cells
         for i, col in enumerate(cols):
-            cells[i].text = str(row.get(col, ""))
+            cells[i].width = col_width
+            cells[i].text = format_cell_value(row.get(col, ""), column_types.get(col))
+            for p in cells[i].paragraphs:
+                for r in p.runs:
+                    r.font.size = font_size
 
     out = io.BytesIO()
     doc.save(out)
     return out.getvalue()
 
 
-def compute_group_aggregates(group_field: str, group_value: str, rows: list, recipient_email: str, amount_field: str = None) -> dict:
-    """Build the merge context available to the subject/body when sending one
-    email per company: every plain excel column (taken from the group's
-    FIRST row, since a single email can't hold 2500 different values), plus
-    the aggregate tags {{<group_field>}}, {{Case_Count}}, {{Company_Email}},
+def compute_group_aggregates(group_fields, group_key_values: dict, rows: list, recipient_email: str, amount_field: str = None, column_types: dict = None) -> dict:
+    """Build the merge context available to the template/subject/body when
+    sending or generating one document per group: every plain excel column
+    (taken from the group's FIRST row, formatted per column_types, since a
+    single document can't hold N different values), plus the aggregate tags
+    {{<each group_field>}}, {{Case_Count}}, {{Company_Email}}, {{Group_Label}}
     and {{Total_<amount_field>}} if an amount column was chosen. Aggregate
-    tags always take priority over a same-named plain column."""
-    ctx = {}
+    tags always take priority over a same-named plain column.
 
+    `group_fields` may be a single column name (legacy, single-field grouping
+    used by the Email Dispatch tab) or a list of column names (multi-field
+    grouping, e.g. Company + Aging bucket, used by Document Generation)."""
+    column_types = column_types or {}
+    if isinstance(group_fields, str):
+        group_fields = [group_fields] if group_fields else []
+
+    ctx = {}
     if rows:
         for k, v in rows[0].items():
-            ctx[str(k)] = v
+            ctx[str(k)] = format_cell_value(v, column_types.get(str(k)))
 
-    if group_field:
-        ctx[group_field] = group_value
+    for f in group_fields:
+        val = group_key_values.get(f, "")
+        ctx[f] = val
+        ctx[tagify(f)] = val
+    ctx["Group_Label"] = " | ".join(str(group_key_values.get(f, "")) for f in group_fields)
     ctx["Case_Count"] = str(len(rows))
     ctx["Company_Email"] = recipient_email
 
@@ -272,7 +457,9 @@ def compute_group_aggregates(group_field: str, group_value: str, rows: list, rec
                 total += float(raw)
             except ValueError:
                 ok = False
-        ctx[f"Total_{amount_field}"] = f"{total:,.2f}" if ok else "N/A"
+        total_str = f"{total:,.2f}" if ok else "N/A"
+        ctx[f"Total_{amount_field}"] = total_str
+        ctx[f"Total_{tagify(amount_field)}"] = total_str
 
     return ctx
 
@@ -383,11 +570,13 @@ def upload_data():
         return jsonify({"error": "Spreadsheet has no rows"}), 400
 
     df.columns = [str(c).strip() for c in df.columns]
-    records = df_to_records(df)
+    column_types = infer_column_types(df)
+    records = df_to_records(df, column_types)
 
     return jsonify({
         "filename": filename,
         "columns": list(df.columns),
+        "column_types": column_types,
         "rows": records,
         "row_count": len(records),
     })
@@ -423,6 +612,20 @@ def upload_template():
 
 # --------------------------------------------------------------------------
 # API: generate merged documents (zip)
+#
+# mode = "per-case" (default, unchanged behaviour): one .docx per row.
+#
+# mode = "company": group ALL rows by one or more columns (e.g. Insurance
+# Company, or Company + Aging bucket together) and produce ONE set of
+# documents per group instead of one per case — so 1000 cases across 10
+# companies produces 10 (not 1000) documents. Per group you can request any
+# combination of:
+#   - a "letter" .docx: the uploaded Word template filled with aggregate
+#     tags ({{Case_Count}}, {{Total_<amount_field>}}, the group-by column(s))
+#   - a Summary Table Document .docx (one row per case, one doc per group)
+#   - a filtered Excel .xlsx (just that group's rows)
+#   - a .zip of the individual per-case .docx documents for that group
+# All group outputs are bundled together into a single downloaded .zip.
 # --------------------------------------------------------------------------
 @app.route("/api/generate", methods=["POST"])
 def generate_documents():
@@ -431,22 +634,109 @@ def generate_documents():
     mapping = data.get("mapping") or {}       # {tag: excel_column}
     rows = data.get("rows") or []
     name_field = data.get("filename_field")   # excel column to use for output filenames
+    column_types = data.get("column_types") or {}
+    mode = data.get("mode") or "per-case"
 
-    if not template_b64 or not rows:
-        return jsonify({"error": "Missing template or data rows"}), 400
+    if not rows:
+        return jsonify({"error": "No data rows to generate from"}), 400
 
-    try:
-        template_bytes = base64.b64decode(template_b64)
-    except Exception:
-        return jsonify({"error": "Invalid template data"}), 400
+    if mode != "company":
+        if not template_b64:
+            return jsonify({"error": "Missing template"}), 400
+        try:
+            template_bytes = base64.b64decode(template_b64)
+        except Exception:
+            return jsonify({"error": "Invalid template data"}), 400
 
-    zip_bytes = build_case_zip(template_bytes, rows, mapping, name_field, default_prefix="document")
+        zip_bytes = build_case_zip(template_bytes, rows, mapping, name_field, default_prefix="document", column_types=column_types)
 
+        return send_file(
+            io.BytesIO(zip_bytes),
+            mimetype="application/zip",
+            as_attachment=True,
+            download_name=f"merged_documents_{datetime.now().strftime('%Y%m%d_%H%M%S')}.zip",
+        )
+
+    # ---- Company-wise / multi-column group-wise generation ----
+    group_fields = data.get("group_fields") or []
+    if not group_fields:
+        return jsonify({"error": "Pick at least one column to group by"}), 400
+    amount_field = data.get("amount_field") or None
+    recipient_field = data.get("recipient_field") or None  # optional, only feeds {{Company_Email}}
+
+    attach_letter = bool(data.get("attach_letter"))
+    attach_table = bool(data.get("attach_table"))
+    attach_excel = bool(data.get("attach_excel"))
+    attach_zip = bool(data.get("attach_zip"))
+
+    if not any([attach_letter, attach_table, attach_excel, attach_zip]):
+        return jsonify({"error": "Pick at least one document type to generate per group"}), 400
+
+    table_columns = data.get("table_columns") or list(rows[0].keys())
+    excel_columns = data.get("excel_columns") or list(rows[0].keys())
+
+    template_bytes = None
+    if attach_letter or attach_zip:
+        if not template_b64:
+            return jsonify({"error": "Upload a Word template first (needed for the letter / zipped case documents), or turn those off"}), 400
+        try:
+            template_bytes = base64.b64decode(template_b64)
+        except Exception:
+            return jsonify({"error": "Invalid template data"}), 400
+
+    groups = {}
+    order = []
+    for row in rows:
+        key_values = {f: (str(row.get(f, "")).strip() or "(blank)") for f in group_fields}
+        key = " | ".join(key_values[f] for f in group_fields)
+        if key not in groups:
+            groups[key] = {"key_values": key_values, "rows": []}
+            order.append(key)
+        groups[key]["rows"].append(row)
+
+    zip_buffer = io.BytesIO()
+    with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zf:
+        for key in order:
+            g = groups[key]
+            g_rows = g["rows"]
+            label = safe_filename(key)
+
+            recipient_email = ""
+            if recipient_field:
+                emails = [str(r.get(recipient_field, "")).strip() for r in g_rows if str(r.get(recipient_field, "")).strip()]
+                recipient_email = emails[0] if emails else ""
+
+            if attach_letter:
+                ctx = compute_group_aggregates(group_fields, g["key_values"], g_rows, recipient_email, amount_field, column_types)
+                template_tags = extract_tags_from_docx(Document(io.BytesIO(template_bytes)))
+                row_mapping = {}
+                for tag in template_tags:
+                    if tag in ctx:
+                        row_mapping[tag] = ctx[tag]
+                    else:
+                        col = mapping.get(tag)
+                        row_mapping[tag] = ctx.get(col, "") if col else ""
+                doc_bytes = fill_template(template_bytes, row_mapping)
+                zf.writestr(f"{label}_letter.docx", doc_bytes)
+
+            if attach_table:
+                table_bytes = build_table_docx(key, g_rows, table_columns, column_types)
+                zf.writestr(f"{label}_summary.docx", table_bytes)
+
+            if attach_excel:
+                excel_bytes = build_filtered_excel(g_rows, excel_columns, column_types)
+                zf.writestr(f"{label}_cases.xlsx", excel_bytes)
+
+            if attach_zip:
+                case_zip_bytes = build_case_zip(template_bytes, g_rows, mapping, name_field, default_prefix=label, column_types=column_types)
+                zf.writestr(f"{label}_case_documents.zip", case_zip_bytes)
+
+    zip_buffer.seek(0)
     return send_file(
-        io.BytesIO(zip_bytes),
+        zip_buffer,
         mimetype="application/zip",
         as_attachment=True,
-        download_name=f"merged_documents_{datetime.now().strftime('%Y%m%d_%H%M%S')}.zip",
+        download_name=f"group_documents_{datetime.now().strftime('%Y%m%d_%H%M%S')}.zip",
     )
 
 
@@ -488,6 +778,7 @@ def send_emails():
     body_template = data.get("body") or ""
     recipient_field = data.get("recipient_field")
     rows = data.get("rows") or []
+    column_types = data.get("column_types") or {}
 
     save_copy = bool(data.get("save_sent_copy"))
     imap_conf = data.get("imap") or {}
@@ -531,14 +822,17 @@ def send_emails():
             continue
 
         try:
-            subject = merge_text(subject_template, row)
-            body = merge_text(body_template, row)
+            subject = merge_text(subject_template, row, column_types)
+            body = merge_text(body_template, row, column_types)
             entry["subject"] = subject
 
             attachment_bytes = None
             attachment_name = None
             if attach_doc and template_bytes is not None:
-                row_mapping = {tag: row.get(col, "") for tag, col in doc_mapping.items()}
+                row_mapping = {
+                    tag: format_cell_value(row.get(col, ""), column_types.get(col))
+                    for tag, col in doc_mapping.items()
+                }
                 attachment_bytes = fill_template(template_bytes, row_mapping)
                 base_name = safe_filename(row.get(filename_field, "")) if filename_field else safe_filename(to_email)
                 attachment_name = f"{base_name}.docx"
@@ -600,6 +894,7 @@ def send_company_group():
     rows = data.get("rows") or []
     recipient_email = str(data.get("recipient_email") or "").strip()
     amount_field = data.get("amount_field") or None
+    column_types = data.get("column_types") or {}
 
     save_copy = bool(data.get("save_sent_copy"))
     imap_conf = data.get("imap") or {}
@@ -633,7 +928,7 @@ def send_company_group():
         return jsonify({"log": [entry]})
 
     try:
-        ctx = compute_group_aggregates(group_field, group_value, rows, recipient_email, amount_field)
+        ctx = compute_group_aggregates([group_field] if group_field else [], {group_field: group_value} if group_field else {}, rows, recipient_email, amount_field, column_types)
         subject = merge_text(subject_template, ctx)
         body = merge_text(body_template, ctx)
         entry["subject"] = subject
@@ -641,16 +936,16 @@ def send_company_group():
         attachments = []
 
         if attach_table:
-            table_bytes = build_table_docx(str(group_value), rows, table_columns)
+            table_bytes = build_table_docx(str(group_value), rows, table_columns, column_types)
             attachments.append((table_bytes, f"{safe_filename(group_value)}_summary.docx"))
 
         if attach_excel:
-            excel_bytes = build_filtered_excel(rows, excel_columns)
+            excel_bytes = build_filtered_excel(rows, excel_columns, column_types)
             attachments.append((excel_bytes, f"{safe_filename(group_value)}_cases.xlsx"))
 
         if attach_zip and template_b64:
             template_bytes = base64.b64decode(template_b64)
-            zip_bytes = build_case_zip(template_bytes, rows, doc_mapping, filename_field)
+            zip_bytes = build_case_zip(template_bytes, rows, doc_mapping, filename_field, column_types=column_types)
             attachments.append((zip_bytes, f"{safe_filename(group_value)}_case_documents.zip"))
 
         msg = build_email(from_name, from_email, recipient_email, subject, body, attachments=attachments)

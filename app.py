@@ -48,7 +48,7 @@ app = Flask(__name__, static_folder=None)
 # Max upload size: 15 MB (Excel + docx templates are small; keeps abuse in check)
 app.config["MAX_CONTENT_LENGTH"] = 15 * 1024 * 1024
 
-TAG_PATTERN = re.compile(r"\{\{\s*([A-Za-z0-9_.\-]+)\s*\}\}")
+TAG_PATTERN = re.compile(r"\{\{\s*([^{}]+?)\s*\}\}")
 
 
 # --------------------------------------------------------------------------

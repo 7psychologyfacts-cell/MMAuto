@@ -37,6 +37,8 @@ from email.utils import formataddr, make_msgid
 
 import pandas as pd
 from docx import Document
+from docx.oxml import OxmlElement
+from docx.oxml.ns import qn
 from flask import Flask, jsonify, request, send_file, send_from_directory
 
 app = Flask(__name__, static_folder=None)
@@ -156,6 +158,117 @@ def safe_filename(name: str) -> str:
     return name or "document"
 
 
+def build_case_zip(template_bytes: bytes, rows: list, doc_mapping: dict, filename_field: str, default_prefix: str = "case") -> bytes:
+    """Merge the Word template against every row and bundle the results into
+    a single ZIP (used both by /api/generate and the company-wise 'zipped
+    individual case documents' attachment)."""
+    zip_buffer = io.BytesIO()
+    with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zf:
+        used_names = set()
+        for i, row in enumerate(rows, start=1):
+            row_mapping = {tag: row.get(col, "") for tag, col in doc_mapping.items()}
+            doc_bytes = fill_template(template_bytes, row_mapping)
+
+            base_name = safe_filename(row.get(filename_field, "")) if filename_field else f"{default_prefix}_{i}"
+            fname = f"{base_name}.docx"
+            n = 1
+            while fname in used_names:
+                n += 1
+                fname = f"{base_name}_{n}.docx"
+            used_names.add(fname)
+
+            zf.writestr(fname, doc_bytes)
+
+    zip_buffer.seek(0)
+    return zip_buffer.getvalue()
+
+
+def build_filtered_excel(rows: list, columns: list) -> bytes:
+    """Build a .xlsx containing only the given rows/columns (a single
+    company's cases) — the 'Filtered Excel' company-wise attachment."""
+    df = pd.DataFrame(rows)
+    cols = [c for c in columns if c in df.columns] or list(df.columns)
+    df = df[cols]
+
+    out = io.BytesIO()
+    with pd.ExcelWriter(out, engine="openpyxl") as writer:
+        df.to_excel(writer, index=False, sheet_name="Cases")
+    return out.getvalue()
+
+
+def _shade_cell(cell, hex_color: str):
+    shd = OxmlElement("w:shd")
+    shd.set(qn("w:fill"), hex_color)
+    cell._tc.get_or_add_tcPr().append(shd)
+
+
+def _repeat_header_row(row):
+    """Mark a table row so it repeats as a header on every page."""
+    trPr = row._tr.get_or_add_trPr()
+    header = OxmlElement("w:tblHeader")
+    header.set(qn("w:val"), "true")
+    trPr.append(header)
+
+
+def build_table_docx(group_label: str, rows: list, columns: list) -> bytes:
+    """Build a .docx with a single aligned, bordered table listing every case
+    for one company — the 'Summary Table Document' company-wise attachment."""
+    doc = Document()
+
+    doc.add_heading(f"Case Summary — {group_label}", level=1)
+    sub = doc.add_paragraph(f"Total cases: {len(rows)}")
+    if sub.runs:
+        sub.runs[0].italic = True
+
+    cols = columns or (list(rows[0].keys()) if rows else [])
+    table = doc.add_table(rows=1, cols=max(len(cols), 1))
+    table.style = "Table Grid"
+
+    hdr_cells = table.rows[0].cells
+    for i, col in enumerate(cols):
+        hdr_cells[i].text = str(col)
+        for p in hdr_cells[i].paragraphs:
+            for r in p.runs:
+                r.bold = True
+        _shade_cell(hdr_cells[i], "D9E2F3")
+    _repeat_header_row(table.rows[0])
+
+    for row in rows:
+        cells = table.add_row().cells
+        for i, col in enumerate(cols):
+            cells[i].text = str(row.get(col, ""))
+
+    out = io.BytesIO()
+    doc.save(out)
+    return out.getvalue()
+
+
+def compute_group_aggregates(group_field: str, group_value: str, rows: list, recipient_email: str, amount_field: str = None) -> dict:
+    """Build the merge context available to the subject/body when sending one
+    email per company: {{<group_field>}}, {{Case_Count}}, {{Company_Email}},
+    and {{Total_<amount_field>}} if an amount column was chosen."""
+    ctx = {}
+    if group_field:
+        ctx[group_field] = group_value
+    ctx["Case_Count"] = str(len(rows))
+    ctx["Company_Email"] = recipient_email
+
+    if amount_field:
+        total = 0.0
+        ok = True
+        for row in rows:
+            raw = str(row.get(amount_field, "")).replace(",", "").strip()
+            if not raw:
+                continue
+            try:
+                total += float(raw)
+            except ValueError:
+                ok = False
+        ctx[f"Total_{amount_field}"] = f"{total:,.2f}" if ok else "N/A"
+
+    return ctx
+
+
 def open_smtp(conf):
     host = conf["host"]
     port = int(conf["port"])
@@ -211,7 +324,11 @@ def append_to_sent(imap_conf, raw_message: bytes):
             pass
 
 
-def build_email(from_name, from_email, to_email, subject, html_body, attachment=None, attachment_name=None):
+def build_email(from_name, from_email, to_email, subject, html_body, attachment=None, attachment_name=None, attachments=None):
+    """Build a MIME email. `attachment`/`attachment_name` is the original
+    single-attachment path (per-case mode). `attachments` is an optional list
+    of (bytes, filename) tuples for callers that need more than one file
+    attached (company-wise mode: table doc + excel + zip together)."""
     msg = MIMEMultipart("mixed")
     msg["Subject"] = subject
     msg["From"] = formataddr((from_name or from_email, from_email))
@@ -224,9 +341,13 @@ def build_email(from_name, from_email, to_email, subject, html_body, attachment=
     alt.attach(MIMEText(html_body or "", "html", "utf-8"))
     msg.attach(alt)
 
+    all_attachments = list(attachments or [])
     if attachment is not None:
-        part = MIMEApplication(attachment, Name=attachment_name)
-        part["Content-Disposition"] = f'attachment; filename="{attachment_name}"'
+        all_attachments.append((attachment, attachment_name))
+
+    for att_bytes, att_name in all_attachments:
+        part = MIMEApplication(att_bytes, Name=att_name)
+        part["Content-Disposition"] = f'attachment; filename="{att_name}"'
         msg.attach(part)
 
     return msg
@@ -311,26 +432,10 @@ def generate_documents():
     except Exception:
         return jsonify({"error": "Invalid template data"}), 400
 
-    zip_buffer = io.BytesIO()
-    with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zf:
-        used_names = set()
-        for i, row in enumerate(rows, start=1):
-            row_mapping = {tag: row.get(col, "") for tag, col in mapping.items()}
-            doc_bytes = fill_template(template_bytes, row_mapping)
+    zip_bytes = build_case_zip(template_bytes, rows, mapping, name_field, default_prefix="document")
 
-            base_name = safe_filename(row.get(name_field, "")) if name_field else f"document_{i}"
-            fname = f"{base_name}.docx"
-            n = 1
-            while fname in used_names:
-                n += 1
-                fname = f"{base_name}_{n}.docx"
-            used_names.add(fname)
-
-            zf.writestr(fname, doc_bytes)
-
-    zip_buffer.seek(0)
     return send_file(
-        zip_buffer,
+        io.BytesIO(zip_bytes),
         mimetype="application/zip",
         as_attachment=True,
         download_name=f"merged_documents_{datetime.now().strftime('%Y%m%d_%H%M%S')}.zip",
@@ -458,6 +563,119 @@ def send_emails():
     sent = sum(1 for e in log if e["status"] == "sent")
     failed = len(log) - sent
     return jsonify({"log": log, "sent": sent, "failed": failed})
+
+
+# --------------------------------------------------------------------------
+# API: send ONE company-wise email (all of that company's cases grouped
+# together). Insurance-recovery use case: instead of one email per patient,
+# HDFC / ICICI Lombard / Care / Niva Bupa etc. each get a single email
+# carrying only their own cases, with up to 3 attachments:
+#   1. Summary Table Document (.docx) - one aligned table of every case
+#   2. Filtered Excel (.xlsx)          - only that company's rows
+#   3. Zipped individual case docs     - the existing Word-template merge,
+#      one .docx per case, bundled into a .zip (optional)
+# The frontend calls this once per company (like /api/send-emails is called
+# once per small batch) so the Email Shot Status panel can update live.
+# --------------------------------------------------------------------------
+@app.route("/api/send-company-group", methods=["POST"])
+def send_company_group():
+    data = request.get_json(force=True, silent=True) or {}
+
+    smtp_conf = data.get("smtp") or {}
+    from_name = data.get("from_name") or ""
+    from_email = data.get("from_email") or smtp_conf.get("username", "")
+    subject_template = data.get("subject") or ""
+    body_template = data.get("body") or ""
+
+    group_field = data.get("group_field") or ""
+    group_value = data.get("group_value", "")
+    rows = data.get("rows") or []
+    recipient_email = str(data.get("recipient_email") or "").strip()
+    amount_field = data.get("amount_field") or None
+
+    save_copy = bool(data.get("save_sent_copy"))
+    imap_conf = data.get("imap") or {}
+
+    attach_table = bool(data.get("attach_table"))
+    table_columns = data.get("table_columns") or (list(rows[0].keys()) if rows else [])
+
+    attach_excel = bool(data.get("attach_excel"))
+    excel_columns = data.get("excel_columns") or (list(rows[0].keys()) if rows else [])
+
+    attach_zip = bool(data.get("attach_zip"))
+    template_b64 = data.get("template_b64")
+    doc_mapping = data.get("doc_mapping") or {}
+    filename_field = data.get("filename_field")
+
+    entry = {
+        "group": group_value,
+        "case_count": len(rows),
+        "recipient": recipient_email,
+        "subject": "",
+        "status": "failed",
+        "error": "",
+        "timestamp": datetime.now().isoformat(timespec="seconds"),
+    }
+
+    if not rows:
+        entry["error"] = "No cases found in this company group"
+        return jsonify({"log": [entry]})
+    if not recipient_email or "@" not in recipient_email:
+        entry["error"] = "Missing/invalid recipient email for this company"
+        return jsonify({"log": [entry]})
+
+    try:
+        ctx = compute_group_aggregates(group_field, group_value, rows, recipient_email, amount_field)
+        subject = merge_text(subject_template, ctx)
+        body = merge_text(body_template, ctx)
+        entry["subject"] = subject
+
+        attachments = []
+
+        if attach_table:
+            table_bytes = build_table_docx(str(group_value), rows, table_columns)
+            attachments.append((table_bytes, f"{safe_filename(group_value)}_summary.docx"))
+
+        if attach_excel:
+            excel_bytes = build_filtered_excel(rows, excel_columns)
+            attachments.append((excel_bytes, f"{safe_filename(group_value)}_cases.xlsx"))
+
+        if attach_zip and template_b64:
+            template_bytes = base64.b64decode(template_b64)
+            zip_bytes = build_case_zip(template_bytes, rows, doc_mapping, filename_field)
+            attachments.append((zip_bytes, f"{safe_filename(group_value)}_case_documents.zip"))
+
+        msg = build_email(from_name, from_email, recipient_email, subject, body, attachments=attachments)
+        raw = msg.as_bytes()
+
+        try:
+            smtp_server = open_smtp(smtp_conf)
+        except Exception as e:
+            entry["error"] = f"Could not connect to SMTP server: {e}"
+            return jsonify({"log": [entry]})
+
+        try:
+            smtp_server.sendmail(from_email, [recipient_email], raw)
+            entry["status"] = "sent"
+        finally:
+            try:
+                smtp_server.quit()
+            except Exception:
+                pass
+
+        if entry["status"] == "sent" and save_copy:
+            try:
+                append_to_sent(imap_conf, raw)
+                entry["sent_copy_saved"] = True
+            except Exception as e:
+                entry["sent_copy_saved"] = False
+                entry["sent_copy_error"] = str(e)
+
+    except Exception as e:
+        entry["status"] = "failed"
+        entry["error"] = str(e)
+
+    return jsonify({"log": [entry]})
 
 
 # --------------------------------------------------------------------------

@@ -22,6 +22,7 @@ single request - never written to disk or logged.
 
 import base64
 import csv
+import html
 import io
 import os
 import re
@@ -42,6 +43,11 @@ from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
 from docx.shared import Cm, Pt
 from flask import Flask, jsonify, request, send_file, send_from_directory
+from reportlab.lib import colors
+from reportlab.lib.pagesizes import A4, landscape
+from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
+from reportlab.lib.units import cm
+from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
 
 app = Flask(__name__, static_folder=None)
 
@@ -230,6 +236,112 @@ def fill_template(template_bytes: bytes, mapping: dict) -> bytes:
     return out.getvalue()
 
 
+def _run_to_html(run) -> str:
+    text = html.escape(run.text or "").replace("\n", "<br/>")
+    if not text:
+        return text
+    if run.bold:
+        text = f"<b>{text}</b>"
+    if run.italic:
+        text = f"<i>{text}</i>"
+    if run.underline:
+        text = f"<u>{text}</u>"
+    return text
+
+
+def _paragraph_to_html(paragraph) -> str:
+    parts = [_run_to_html(r) for r in paragraph.runs]
+    joined = "".join(parts)
+    return joined if joined else html.escape(paragraph.text or "")
+
+
+def docx_bytes_to_pdf_bytes(docx_bytes: bytes) -> bytes:
+    """Best-effort render of a generated .docx (paragraphs + tables, in
+    document order) into a PDF using reportlab. This is used for the
+    optional 'PDF' output format: since the server runs on Vercel's
+    serverless Python runtime (no LibreOffice/MS Word available to do a
+    true docx->pdf conversion), this rebuilds the same text/tables into a
+    PDF directly. Formatting is kept simple (bold/italic/underline,
+    heading styles, bordered tables) - good enough for merge letters and
+    summary tables, though very complex Word layouts (images, multi-column
+    sections, headers/footers) are not reproduced."""
+    src = Document(io.BytesIO(docx_bytes))
+
+    is_landscape = False
+    try:
+        is_landscape = src.sections[0].orientation == WD_ORIENT.LANDSCAPE
+    except Exception:
+        pass
+    page_size = landscape(A4) if is_landscape else A4
+
+    out = io.BytesIO()
+    pdf_doc = SimpleDocTemplate(
+        out,
+        pagesize=page_size,
+        topMargin=1.5 * cm,
+        bottomMargin=1.5 * cm,
+        leftMargin=1.5 * cm,
+        rightMargin=1.5 * cm,
+    )
+
+    styles = getSampleStyleSheet()
+    body_style = ParagraphStyle("MMBody", parent=styles["Normal"], fontSize=10, leading=14)
+    heading_style = ParagraphStyle("MMHeading", parent=styles["Heading2"], fontSize=14, leading=18, spaceAfter=8)
+
+    para_by_elem = {p._p: p for p in src.paragraphs}
+    table_by_elem = {t._tbl: t for t in src.tables}
+
+    story = []
+    for child in src.element.body:
+        tag = child.tag.split("}")[-1]
+        if tag == "p" and child in para_by_elem:
+            p = para_by_elem[child]
+            text = _paragraph_to_html(p)
+            if not text.strip():
+                story.append(Spacer(1, 6))
+                continue
+            style_name = (p.style.name if p.style else "") or ""
+            style = heading_style if "Heading" in style_name else body_style
+            story.append(Paragraph(text, style))
+            story.append(Spacer(1, 4))
+        elif tag == "tbl" and child in table_by_elem:
+            t = table_by_elem[child]
+            data = [[cell.text for cell in row.cells] for row in t.rows]
+            if not data:
+                continue
+            col_count = max(len(r) for r in data)
+            avail_width = page_size[0] - 3 * cm
+            col_width = avail_width / col_count
+            tbl = Table(data, colWidths=[col_width] * col_count, repeatRows=1)
+            tbl.setStyle(TableStyle([
+                ("GRID", (0, 0), (-1, -1), 0.5, colors.grey),
+                ("BACKGROUND", (0, 0), (-1, 0), colors.Color(0.85, 0.89, 0.95)),
+                ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+                ("FONTSIZE", (0, 0), (-1, -1), 8),
+                ("VALIGN", (0, 0), (-1, -1), "TOP"),
+            ]))
+            story.append(tbl)
+            story.append(Spacer(1, 10))
+
+    if not story:
+        story.append(Paragraph("", body_style))
+
+    pdf_doc.build(story)
+    return out.getvalue()
+
+
+def finalize_doc(docx_bytes: bytes, base_name: str, output_format: str = "docx"):
+    """Given generated .docx bytes and a filename WITHOUT extension, return
+    (final_bytes, final_filename) - converted to PDF if output_format is
+    'pdf', otherwise returned unchanged as .docx. Used everywhere a merged
+    letter / summary table / per-case document is produced, so the new
+    'PDF' output option is a drop-in alternative to the existing Word
+    output rather than a replacement for it."""
+    if output_format == "pdf":
+        return docx_bytes_to_pdf_bytes(docx_bytes), f"{base_name}.pdf"
+    return docx_bytes, f"{base_name}.docx"
+
+
 def merge_text(template_str: str, row: dict, column_types: dict = None) -> str:
     """Substitute {{ColumnName}} directly against an excel row (used for
     email subject/body, which use the raw excel column names as tags)."""
@@ -244,6 +356,17 @@ def merge_text(template_str: str, row: dict, column_types: dict = None) -> str:
         return format_cell_value(row.get(key), column_types.get(key))
 
     return TAG_PATTERN.sub(sub, template_str)
+
+
+def parse_cc_list(value) -> list:
+    """Normalize the 'cc' field sent from the frontend (either a list of
+    addresses or a single comma/semicolon separated string) into a clean
+    list of non-empty email addresses."""
+    if not value:
+        return []
+    if isinstance(value, str):
+        value = re.split(r"[,;]", value)
+    return [str(v).strip() for v in value if str(v).strip()]
 
 
 def safe_filename(name: str) -> str:
@@ -261,10 +384,11 @@ def tagify(name: str) -> str:
     return safe or "Field"
 
 
-def build_case_zip(template_bytes: bytes, rows: list, doc_mapping: dict, filename_field: str, default_prefix: str = "case", column_types: dict = None) -> bytes:
+def build_case_zip(template_bytes: bytes, rows: list, doc_mapping: dict, filename_field: str, default_prefix: str = "case", column_types: dict = None, output_format: str = "docx") -> bytes:
     """Merge the Word template against every row and bundle the results into
     a single ZIP (used both by /api/generate and the company-wise 'zipped
-    individual case documents' attachment)."""
+    individual case documents' attachment). output_format='pdf' emits each
+    case document as a PDF instead of .docx."""
     column_types = column_types or {}
     zip_buffer = io.BytesIO()
     with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zf:
@@ -277,11 +401,12 @@ def build_case_zip(template_bytes: bytes, rows: list, doc_mapping: dict, filenam
             doc_bytes = fill_template(template_bytes, row_mapping)
 
             base_name = safe_filename(row.get(filename_field, "")) if filename_field else f"{default_prefix}_{i}"
-            fname = f"{base_name}.docx"
+            doc_bytes, fname = finalize_doc(doc_bytes, base_name, output_format)
             n = 1
             while fname in used_names:
                 n += 1
-                fname = f"{base_name}_{n}.docx"
+                stem, _, ext = fname.rpartition(".")
+                fname = f"{base_name}_{n}.{ext}"
             used_names.add(fname)
 
             zf.writestr(fname, doc_bytes)
@@ -578,15 +703,20 @@ def append_to_sent(imap_conf, raw_message: bytes):
             pass
 
 
-def build_email(from_name, from_email, to_email, subject, html_body, attachment=None, attachment_name=None, attachments=None):
+def build_email(from_name, from_email, to_email, subject, html_body, attachment=None, attachment_name=None, attachments=None, cc_emails=None):
     """Build a MIME email. `attachment`/`attachment_name` is the original
     single-attachment path (per-case mode). `attachments` is an optional list
     of (bytes, filename) tuples for callers that need more than one file
-    attached (company-wise mode: table doc + excel + zip together)."""
+    attached (company-wise mode: table doc + excel + zip together).
+    `cc_emails` is an optional list of CC recipient addresses - added as a
+    visible Cc header (actual delivery to them is handled by the caller
+    including them in the SMTP envelope recipient list)."""
     msg = MIMEMultipart("mixed")
     msg["Subject"] = subject
     msg["From"] = formataddr((from_name or from_email, from_email))
     msg["To"] = to_email
+    if cc_emails:
+        msg["Cc"] = ", ".join(cc_emails)
     msg["Message-ID"] = make_msgid()
 
     alt = MIMEMultipart("alternative")
@@ -695,6 +825,7 @@ def generate_documents():
     name_field = data.get("filename_field")   # excel column to use for output filenames
     column_types = data.get("column_types") or {}
     mode = data.get("mode") or "per-case"
+    output_format = data.get("output_format") or "docx"  # 'docx' | 'pdf'
 
     if not rows:
         return jsonify({"error": "No data rows to generate from"}), 400
@@ -707,7 +838,7 @@ def generate_documents():
         except Exception:
             return jsonify({"error": "Invalid template data"}), 400
 
-        zip_bytes = build_case_zip(template_bytes, rows, mapping, name_field, default_prefix="document", column_types=column_types)
+        zip_bytes = build_case_zip(template_bytes, rows, mapping, name_field, default_prefix="document", column_types=column_types, output_format=output_format)
 
         return send_file(
             io.BytesIO(zip_bytes),
@@ -771,18 +902,20 @@ def generate_documents():
                 template_tags = extract_tags_from_docx(Document(io.BytesIO(template_bytes)))
                 row_mapping = resolve_letter_tags(template_tags, tag_aggregates, ctx, g_rows, mapping)
                 doc_bytes = fill_template(template_bytes, row_mapping)
-                zf.writestr(f"{label}_letter.docx", doc_bytes)
+                doc_bytes, doc_name = finalize_doc(doc_bytes, f"{label}_letter", output_format)
+                zf.writestr(doc_name, doc_bytes)
 
             if attach_table:
                 table_bytes = build_table_docx(key, g_rows, table_columns, column_types)
-                zf.writestr(f"{label}_summary.docx", table_bytes)
+                table_bytes, table_name = finalize_doc(table_bytes, f"{label}_summary", output_format)
+                zf.writestr(table_name, table_bytes)
 
             if attach_excel:
                 excel_bytes = build_filtered_excel(g_rows, excel_columns, column_types)
                 zf.writestr(f"{label}_cases.xlsx", excel_bytes)
 
             if attach_zip:
-                case_zip_bytes = build_case_zip(template_bytes, g_rows, mapping, name_field, default_prefix=label, column_types=column_types)
+                case_zip_bytes = build_case_zip(template_bytes, g_rows, mapping, name_field, default_prefix=label, column_types=column_types, output_format=output_format)
                 zf.writestr(f"{label}_case_documents.zip", case_zip_bytes)
 
     zip_buffer.seek(0)
@@ -841,6 +974,8 @@ def send_emails():
     template_b64 = data.get("template_b64")
     doc_mapping = data.get("doc_mapping") or {}
     filename_field = data.get("filename_field")
+    output_format = data.get("output_format") or "docx"  # 'docx' | 'pdf'
+    cc_list = parse_cc_list(data.get("cc"))
 
     if not recipient_field:
         return jsonify({"error": "recipient_field (which column holds the email address) is required"}), 400
@@ -889,12 +1024,12 @@ def send_emails():
                 }
                 attachment_bytes = fill_template(template_bytes, row_mapping)
                 base_name = safe_filename(row.get(filename_field, "")) if filename_field else safe_filename(to_email)
-                attachment_name = f"{base_name}.docx"
+                attachment_bytes, attachment_name = finalize_doc(attachment_bytes, base_name, output_format)
 
-            msg = build_email(from_name, from_email, to_email, subject, body, attachment_bytes, attachment_name)
+            msg = build_email(from_name, from_email, to_email, subject, body, attachment_bytes, attachment_name, cc_emails=cc_list)
             raw = msg.as_bytes()
 
-            smtp_server.sendmail(from_email, [to_email], raw)
+            smtp_server.sendmail(from_email, [to_email] + cc_list, raw)
             entry["status"] = "sent"
 
             if save_copy:
@@ -965,6 +1100,8 @@ def send_company_group():
     template_b64 = data.get("template_b64")
     doc_mapping = data.get("doc_mapping") or {}
     filename_field = data.get("filename_field")
+    output_format = data.get("output_format") or "docx"  # 'docx' | 'pdf'
+    cc_list = parse_cc_list(data.get("cc"))
 
     entry = {
         "group": group_value,
@@ -996,11 +1133,13 @@ def send_company_group():
             template_tags = extract_tags_from_docx(Document(io.BytesIO(template_bytes)))
             row_mapping = resolve_letter_tags(template_tags, tag_aggregates, ctx, rows, doc_mapping)
             letter_bytes = fill_template(template_bytes, row_mapping)
-            attachments.append((letter_bytes, f"{safe_filename(group_value)}_letter.docx"))
+            letter_bytes, letter_name = finalize_doc(letter_bytes, f"{safe_filename(group_value)}_letter", output_format)
+            attachments.append((letter_bytes, letter_name))
 
         if attach_table:
             table_bytes = build_table_docx(str(group_value), rows, table_columns, column_types)
-            attachments.append((table_bytes, f"{safe_filename(group_value)}_summary.docx"))
+            table_bytes, table_name = finalize_doc(table_bytes, f"{safe_filename(group_value)}_summary", output_format)
+            attachments.append((table_bytes, table_name))
 
         if attach_excel:
             excel_bytes = build_filtered_excel(rows, excel_columns, column_types)
@@ -1008,10 +1147,10 @@ def send_company_group():
 
         if attach_zip and template_b64:
             template_bytes = base64.b64decode(template_b64)
-            zip_bytes = build_case_zip(template_bytes, rows, doc_mapping, filename_field, column_types=column_types)
+            zip_bytes = build_case_zip(template_bytes, rows, doc_mapping, filename_field, column_types=column_types, output_format=output_format)
             attachments.append((zip_bytes, f"{safe_filename(group_value)}_case_documents.zip"))
 
-        msg = build_email(from_name, from_email, recipient_email, subject, body, attachments=attachments)
+        msg = build_email(from_name, from_email, recipient_email, subject, body, attachments=attachments, cc_emails=cc_list)
         raw = msg.as_bytes()
 
         try:
@@ -1021,7 +1160,7 @@ def send_company_group():
             return jsonify({"log": [entry]})
 
         try:
-            smtp_server.sendmail(from_email, [recipient_email], raw)
+            smtp_server.sendmail(from_email, [recipient_email] + cc_list, raw)
             entry["status"] = "sent"
         finally:
             try:

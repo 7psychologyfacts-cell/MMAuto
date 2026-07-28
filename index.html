@@ -560,6 +560,14 @@
       <select id="filenameField" class="text-input" style="max-width:220px;"></select>
     </div>
 
+    <div class="format-picker" id="docOutputFormatRow">
+      <span>Output format</span>
+      <select id="docOutputFormat" class="text-input" style="max-width:220px;">
+        <option value="docx">Word (.docx)</option>
+        <option value="pdf">PDF (.pdf)</option>
+      </select>
+    </div>
+
     <div class="action-buttons">
       <button class="btn btn-primary" id="generateBtn" onclick="generateDocuments()">
         <svg class="icon icon-sm" style="stroke:#fff"><use href="#icon-send"></use></svg> <span id="generateBtnLabel">Generate All Documents</span>
@@ -661,8 +669,15 @@
 
       <label class="checkbox-row" id="attachDocRow">
         <input type="checkbox" id="attachDoc" checked>
-        <span>Automatically attach the merged Word document to each email</span>
+        <span>Automatically attach the merged document to each email</span>
       </label>
+      <div class="format-picker" id="dispatchOutputFormatRow" style="margin-top:8px;">
+        <span>Attach as</span>
+        <select id="dispatchOutputFormat" class="text-input" style="max-width:180px;">
+          <option value="docx">Word (.docx)</option>
+          <option value="pdf">PDF (.pdf)</option>
+        </select>
+      </div>
     </div>
 
     <!-- Dispatch Settings -->
@@ -674,6 +689,10 @@
 
       <label class="field-label" for="recipientColumn" id="recipientColumnLabel">Recipient email column</label>
       <select id="recipientColumn" class="text-input" onchange="if(dispatchMode==='company'){recomputeCompanyGroups();}"></select>
+
+      <label class="field-label" for="ccEmails">CC (optional)</label>
+      <input type="text" id="ccEmails" class="text-input" placeholder="e.g. manager@company.com, records@company.com">
+      <p class="hint" style="margin-top:2px;">Separate multiple addresses with a comma. Applied to every email sent from either dispatch mode.</p>
 
       <label class="field-label" for="smtpProvider">Email service provider</label>
       <select id="smtpProvider" class="text-input" onchange="applyProviderPreset()">
@@ -809,6 +828,14 @@
       <span>Individual case documents, zipped (.zip) — uses the Word template from the Document Generation tab</span>
     </label>
     <p class="hint" id="zipDocsHint" style="margin:6px 0 14px;"></p>
+
+    <div class="format-picker" id="companyOutputFormatRow" style="margin-bottom:14px;">
+      <span>Letter / Summary Table / Zipped case documents format</span>
+      <select id="companyOutputFormat" class="text-input" style="max-width:180px;">
+        <option value="docx">Word (.docx)</option>
+        <option value="pdf">PDF (.pdf)</option>
+      </select>
+    </div>
 
     <div id="tableColumnsWrap">
       <label class="field-label">Columns to include in the Summary Table Document</label>
@@ -1209,7 +1236,8 @@ async function generateDocuments(){
       mapping: mapping,
       rows: excelData,
       column_types: columnTypes,
-      filename_field: document.getElementById("filenameField").value
+      filename_field: document.getElementById("filenameField").value,
+      output_format: document.getElementById("docOutputFormat").value
     }, "merged_documents.zip");
     showToast("ZIP file download started.");
   } catch (e) {
@@ -1526,8 +1554,9 @@ async function generateCompanyDocuments(){
       attach_table: attachTable,
       table_columns: docTableColumns,
       attach_excel: attachExcel,
-      excel_columns: columns,
-      attach_zip: attachZip
+      excel_columns: docTableColumns,
+      attach_zip: attachZip,
+      output_format: document.getElementById("docOutputFormat").value
     }, "group_documents.zip");
     showToast("ZIP file download started.");
   } catch (e) {
@@ -1740,13 +1769,15 @@ function buildCompanyDispatchPayload(group){
     attach_table: document.getElementById("attachTableDoc").checked,
     table_columns: tableColumns,
     attach_excel: document.getElementById("attachExcelFiltered").checked,
-    excel_columns: columns,
+    excel_columns: tableColumns,
     attach_zip: document.getElementById("attachZipDocs").checked && !!templateB64,
     attach_letter: document.getElementById("attachLetterDoc").checked && !!templateB64,
     tag_aggregates: docTagAggregates,
     template_b64: templateB64,
     doc_mapping: mapping,
-    filename_field: document.getElementById("filenameField").value
+    filename_field: document.getElementById("filenameField").value,
+    output_format: document.getElementById("companyOutputFormat").value,
+    cc: getCcList()
   };
 }
 
@@ -1903,6 +1934,11 @@ function getSmtpConfig(){
   };
 }
 
+function getCcList(){
+  const raw = document.getElementById("ccEmails").value || "";
+  return raw.split(/[,;]/).map(s => s.trim()).filter(Boolean);
+}
+
 function getImapConfig(){
   return {
     host: document.getElementById("imapHost").value.trim(),
@@ -1983,7 +2019,9 @@ function buildDispatchPayload(rows, recipientField){
     attach_document: document.getElementById("attachDoc").checked,
     template_b64: templateB64,
     doc_mapping: mapping,
-    filename_field: document.getElementById("filenameField").value
+    filename_field: document.getElementById("filenameField").value,
+    output_format: document.getElementById("dispatchOutputFormat").value,
+    cc: getCcList()
   };
 }
 

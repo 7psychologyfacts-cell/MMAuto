@@ -542,6 +542,41 @@ def build_table_docx(group_label: str, rows: list, columns: list, column_types: 
     return out.getvalue()
 
 
+def build_table_html(group_label: str, rows: list, columns: list, column_types: dict = None) -> str:
+    """Build the same aligned Case Summary table as build_table_docx(), but as
+    an HTML fragment (inline styles only, since most mail clients strip
+    <style> blocks) — used to embed the Summary Table directly inside the
+    email body, below the user's own description, instead of / in addition
+    to sending it as a separate .docx attachment."""
+    column_types = column_types or {}
+    cols = columns or (list(rows[0].keys()) if rows else [])
+
+    th_style = (
+        "border:1px solid #999;padding:6px 8px;background:#D9E2F3;"
+        "font-weight:bold;font-size:12px;text-align:left;white-space:nowrap;"
+    )
+    td_style = "border:1px solid #999;padding:6px 8px;font-size:12px;"
+
+    header_html = "".join(f'<th style="{th_style}">{html.escape(str(c))}</th>' for c in cols)
+    body_rows = []
+    for row in rows:
+        cells = "".join(
+            f'<td style="{td_style}">{html.escape(format_cell_value(row.get(c, ""), column_types.get(c)))}</td>'
+            for c in cols
+        )
+        body_rows.append(f"<tr>{cells}</tr>")
+
+    return (
+        f'<div style="margin-top:18px;">'
+        f'<p style="font-weight:bold;margin:0 0 4px;">Case Summary — {html.escape(str(group_label))}</p>'
+        f'<p style="font-style:italic;margin:0 0 8px;font-size:12px;">Total cases: {len(rows)}</p>'
+        f'<table style="border-collapse:collapse;width:100%;">'
+        f'<thead><tr>{header_html}</tr></thead>'
+        f'<tbody>{"".join(body_rows)}</tbody>'
+        f'</table></div>'
+    )
+
+
 def sum_column(rows: list, col: str):
     """Sum a column across a list of rows. Returns (total, ok) where ok is
     False if any non-blank cell in that column couldn't be parsed as a
@@ -1090,6 +1125,7 @@ def send_company_group():
 
     attach_table = bool(data.get("attach_table"))
     table_columns = data.get("table_columns") or (list(rows[0].keys()) if rows else [])
+    table_in_body = bool(data.get("table_in_body"))
 
     attach_excel = bool(data.get("attach_excel"))
     excel_columns = data.get("excel_columns") or (list(rows[0].keys()) if rows else [])
@@ -1125,6 +1161,9 @@ def send_company_group():
         subject = merge_text(subject_template, ctx)
         body = merge_text(body_template, ctx)
         entry["subject"] = subject
+
+        if table_in_body:
+            body += build_table_html(str(group_value), rows, table_columns, column_types)
 
         attachments = []
 

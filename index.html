@@ -819,6 +819,10 @@
       <input type="checkbox" id="attachTableDoc" checked onchange="onGroupingConfigChange()">
       <span>Summary Table Document (.docx) — one aligned table listing every case for that company</span>
     </label>
+    <label class="checkbox-row" style="margin-top:6px;margin-left:26px;">
+      <input type="checkbox" id="tableInBody" onchange="onGroupingConfigChange()">
+      <span>Also show this table inside the email body, below the description — turn off the attachment above if you only want it in the body, not as a separate letter</span>
+    </label>
     <label class="checkbox-row" style="margin-top:8px;">
       <input type="checkbox" id="attachExcelFiltered" checked onchange="onGroupingConfigChange()">
       <span>Filtered Excel (.xlsx) — only that company's rows</span>
@@ -1767,6 +1771,7 @@ function buildCompanyDispatchPayload(group){
     save_sent_copy: document.getElementById("saveSentCopy").checked,
     imap: getImapConfig(),
     attach_table: document.getElementById("attachTableDoc").checked,
+    table_in_body: document.getElementById("tableInBody").checked,
     table_columns: tableColumns,
     attach_excel: document.getElementById("attachExcelFiltered").checked,
     excel_columns: tableColumns,

@@ -116,11 +116,8 @@ Then open `http://localhost:5000` in your browser.
 
 I built this project to solve a real repetitive-work problem end-to-end — from spreadsheet parsing to document generation to live email dispatch — and to demonstrate that I can take an idea from "this is annoying and manual" to a working, deployable tool.
 
-I'm currently looking for opportunities in **[Software/IT Development, Data Analysis, Data Science, or Business/Corporate roles]** — I'd love to bring this same hands-on, problem-solving approach to your team.
-
-📧 **Email:** your-email@example.com
-🔗 **LinkedIn:** linkedin.com/in/your-profile
-💻 **GitHub:** github.com/your-username
+📧 **Email:** milanvadher2003@gmail.com
+💻 **GitHub:** github.com/7psychologyfacts-cell
 
 ---
 

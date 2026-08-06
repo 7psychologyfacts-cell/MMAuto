@@ -694,6 +694,10 @@
       <input type="text" id="ccEmails" class="text-input" placeholder="e.g. manager@company.com, records@company.com">
       <p class="hint" style="margin-top:2px;">Separate multiple addresses with a comma. Applied to every email sent from either dispatch mode.</p>
 
+      <label class="field-label" for="ccColumn" style="margin-top:10px;">CC email column from sheet (optional)</label>
+      <select id="ccColumn" class="text-input"></select>
+      <p class="hint" style="margin-top:2px;">If your sheet has a column with the recipient company's contact person's email, pick it here — it will be added to CC for that row automatically. Leave as "None" if your sheet has no such column.</p>
+
       <label class="field-label" for="smtpProvider">Email service provider</label>
       <select id="smtpProvider" class="text-input" onchange="applyProviderPreset()">
         <option value="gmail">Gmail SMTP</option>
@@ -1001,6 +1005,7 @@ async function handleExcelUpload(file){
     renderTableHeader();
     renderTableBody();
     renderRecipientColumnOptions();
+    renderCcColumnOptions();
     renderMoreTagOptions();
     renderFilenameFieldOptions();
     renderRowSelectorOptions();
@@ -1582,6 +1587,23 @@ function renderRecipientColumnOptions(){
   ).join('');
 }
 
+function renderCcColumnOptions(){
+  const sel = document.getElementById("ccColumn");
+  // Only auto-guess a CC column if one genuinely looks like it (contains "cc"
+  // as a whole word, e.g. "CC Email" / "CC_Email") - never auto-pick the same
+  // column already used as the recipient / "To" column.
+  const recipientCol = document.getElementById("recipientColumn").value;
+  const guess = columns.find(c => /(^|[^a-z])cc([^a-z]|$)/i.test(c) && c !== recipientCol) || "";
+  sel.innerHTML = `<option value="">— None (no CC column) —</option>` +
+    columns.map(col =>
+      `<option value="${escapeHtml(col)}" ${col === guess ? 'selected' : ''}>${escapeHtml(col)}</option>`
+    ).join('');
+}
+
+function getCcField(){
+  return document.getElementById("ccColumn").value || null;
+}
+
 function renderMoreTagOptions(){
   const sel = document.getElementById("moreTagSelect");
 
@@ -1782,7 +1804,8 @@ function buildCompanyDispatchPayload(group){
     doc_mapping: mapping,
     filename_field: document.getElementById("filenameField").value,
     output_format: document.getElementById("companyOutputFormat").value,
-    cc: getCcList()
+    cc: getCcList(),
+    cc_field: getCcField()
   };
 }
 
@@ -2026,7 +2049,8 @@ function buildDispatchPayload(rows, recipientField){
     doc_mapping: mapping,
     filename_field: document.getElementById("filenameField").value,
     output_format: document.getElementById("dispatchOutputFormat").value,
-    cc: getCcList()
+    cc: getCcList(),
+    cc_field: getCcField()
   };
 }
 
@@ -2043,7 +2067,8 @@ function appendLogLine(entry){
   line.className = "log-line";
   const ok = entry.status === "sent";
   const copyNote = entry.sent_copy_saved === true ? " · copy saved" : (entry.sent_copy_saved === false ? " · copy failed" : "");
-  const label = entry.group ? `${entry.group} (${entry.case_count} cases) → ${entry.recipient}` : entry.recipient;
+  let label = entry.group ? `${entry.group} (${entry.case_count} cases) → ${entry.recipient}` : entry.recipient;
+  if (entry.cc) label += ` (cc: ${entry.cc})`;
   line.innerHTML = `<span>${escapeHtml(label)}</span><span class="${ok ? 'log-status-ok' : 'log-status-fail'}">${ok ? 'Sent' + copyNote : 'Failed: ' + escapeHtml(entry.error || 'error')}</span>`;
   logEl.prepend(line);
 }

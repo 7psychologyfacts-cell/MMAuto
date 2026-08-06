@@ -369,6 +369,22 @@ def parse_cc_list(value) -> list:
     return [str(v).strip() for v in value if str(v).strip()]
 
 
+def merge_cc_lists(*lists) -> list:
+    """Combine several CC lists (e.g. a static/global CC list + a per-row CC
+    column) into one de-duplicated list, preserving order and skipping
+    invalid-looking entries (no '@')."""
+    seen = set()
+    out = []
+    for lst in lists:
+        for addr in lst or []:
+            addr = str(addr).strip()
+            key = addr.lower()
+            if addr and "@" in addr and key not in seen:
+                seen.add(key)
+                out.append(addr)
+    return out
+
+
 def safe_filename(name: str) -> str:
     name = re.sub(r"[^\w\-.]+", "_", str(name)).strip("_")
     return name or "document"
@@ -1011,6 +1027,7 @@ def send_emails():
     filename_field = data.get("filename_field")
     output_format = data.get("output_format") or "docx"  # 'docx' | 'pdf'
     cc_list = parse_cc_list(data.get("cc"))
+    cc_field = data.get("cc_field") or None  # optional excel column holding per-row CC address(es)
 
     if not recipient_field:
         return jsonify({"error": "recipient_field (which column holds the email address) is required"}), 400
@@ -1050,6 +1067,10 @@ def send_emails():
             body = merge_text(body_template, row, column_types)
             entry["subject"] = subject
 
+            row_cc = parse_cc_list(row.get(cc_field)) if cc_field else []
+            row_cc_list = merge_cc_lists(cc_list, row_cc)
+            entry["cc"] = ", ".join(row_cc_list)
+
             attachment_bytes = None
             attachment_name = None
             if attach_doc and template_bytes is not None:
@@ -1061,10 +1082,10 @@ def send_emails():
                 base_name = safe_filename(row.get(filename_field, "")) if filename_field else safe_filename(to_email)
                 attachment_bytes, attachment_name = finalize_doc(attachment_bytes, base_name, output_format)
 
-            msg = build_email(from_name, from_email, to_email, subject, body, attachment_bytes, attachment_name, cc_emails=cc_list)
+            msg = build_email(from_name, from_email, to_email, subject, body, attachment_bytes, attachment_name, cc_emails=row_cc_list)
             raw = msg.as_bytes()
 
-            smtp_server.sendmail(from_email, [to_email] + cc_list, raw)
+            smtp_server.sendmail(from_email, [to_email] + row_cc_list, raw)
             entry["status"] = "sent"
 
             if save_copy:
@@ -1138,6 +1159,7 @@ def send_company_group():
     filename_field = data.get("filename_field")
     output_format = data.get("output_format") or "docx"  # 'docx' | 'pdf'
     cc_list = parse_cc_list(data.get("cc"))
+    cc_field = data.get("cc_field") or None  # optional excel column holding per-row CC address(es)
 
     entry = {
         "group": group_value,
@@ -1165,6 +1187,13 @@ def send_company_group():
         if table_in_body:
             body += build_table_html(str(group_value), rows, table_columns, column_types)
 
+        group_cc = []
+        if cc_field:
+            for r in rows:
+                group_cc.extend(parse_cc_list(r.get(cc_field)))
+        group_cc_list = merge_cc_lists(cc_list, group_cc)
+        entry["cc"] = ", ".join(group_cc_list)
+
         attachments = []
 
         if attach_letter and template_b64:
@@ -1189,7 +1218,7 @@ def send_company_group():
             zip_bytes = build_case_zip(template_bytes, rows, doc_mapping, filename_field, column_types=column_types, output_format=output_format)
             attachments.append((zip_bytes, f"{safe_filename(group_value)}_case_documents.zip"))
 
-        msg = build_email(from_name, from_email, recipient_email, subject, body, attachments=attachments, cc_emails=cc_list)
+        msg = build_email(from_name, from_email, recipient_email, subject, body, attachments=attachments, cc_emails=group_cc_list)
         raw = msg.as_bytes()
 
         try:
@@ -1199,7 +1228,7 @@ def send_company_group():
             return jsonify({"log": [entry]})
 
         try:
-            smtp_server.sendmail(from_email, [recipient_email] + cc_list, raw)
+            smtp_server.sendmail(from_email, [recipient_email] + group_cc_list, raw)
             entry["status"] = "sent"
         finally:
             try:
@@ -1232,7 +1261,7 @@ def download_log():
     log = data.get("log") or []
 
     buf = io.StringIO()
-    fieldnames = ["timestamp", "recipient", "subject", "status", "sent_copy_saved", "error"]
+    fieldnames = ["timestamp", "recipient", "cc", "subject", "status", "sent_copy_saved", "error"]
     writer = csv.DictWriter(buf, fieldnames=fieldnames, extrasaction="ignore")
     writer.writeheader()
     for row in log:

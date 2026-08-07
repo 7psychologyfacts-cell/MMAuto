@@ -166,25 +166,62 @@ def df_to_records(df: pd.DataFrame, column_types: dict = None):
     return records
 
 
+def iter_all_paragraphs(container):
+    """Recursively yield every paragraph inside `container` (a Document,
+    header/footer, or table cell) - including paragraphs that live inside
+    tables nested arbitrarily deep inside other tables. python-docx's own
+    `.paragraphs` only looks one level down, so a table nested inside a
+    table cell (a "nested table") was previously skipped entirely; this
+    walks cell.tables recursively so no depth of nesting is missed."""
+    for p in container.paragraphs:
+        yield p
+    for table in container.tables:
+        for row in table.rows:
+            for cell in row.cells:
+                yield from iter_all_paragraphs(cell)
+
+
+def iter_textbox_paragraphs(doc: Document):
+    """Yield every paragraph found inside text boxes (Word stores text-box
+    content as w:txbxContent elements, which python-docx does not expose
+    via .paragraphs/.tables at all) anywhere in the main document body and
+    in every header/footer."""
+    from docx.text.paragraph import Paragraph as _Paragraph
+
+    parts = [doc.part]
+    for section in doc.sections:
+        parts.append(section.header.part)
+        parts.append(section.footer.part)
+
+    seen_parts = set()
+    for part in parts:
+        if part in seen_parts:
+            continue
+        seen_parts.add(part)
+        root = part.element
+        for txbx in root.iter(qn("w:txbxContent")):
+            for p_elem in txbx.iter(qn("w:p")):
+                yield _Paragraph(p_elem, part)
+
+
 def extract_tags_from_docx(doc: Document):
-    """Find every {{tag}} used anywhere in the document body, tables, and headers/footers."""
+    """Find every {{tag}} used anywhere in the document: body paragraphs,
+    tables (including nested tables at any depth), headers/footers, and
+    text boxes."""
     tags = set()
 
     def scan(text):
         for m in TAG_PATTERN.finditer(text):
             tags.add(m.group(1))
 
-    for p in doc.paragraphs:
+    for p in iter_all_paragraphs(doc):
         scan(p.text)
-    for table in doc.tables:
-        for row in table.rows:
-            for cell in row.cells:
-                for p in cell.paragraphs:
-                    scan(p.text)
     for section in doc.sections:
         for part in (section.header, section.footer):
-            for p in part.paragraphs:
+            for p in iter_all_paragraphs(part):
                 scan(p.text)
+    for p in iter_textbox_paragraphs(doc):
+        scan(p.text)
 
     return sorted(tags)
 
@@ -219,17 +256,14 @@ def fill_template(template_bytes: bytes, mapping: dict) -> bytes:
     using `mapping` = {tag_name: value}."""
     doc = Document(io.BytesIO(template_bytes))
 
-    for p in doc.paragraphs:
+    for p in iter_all_paragraphs(doc):
         replace_tags_in_paragraph(p, mapping)
-    for table in doc.tables:
-        for row in table.rows:
-            for cell in row.cells:
-                for p in cell.paragraphs:
-                    replace_tags_in_paragraph(p, mapping)
     for section in doc.sections:
         for part in (section.header, section.footer):
-            for p in part.paragraphs:
+            for p in iter_all_paragraphs(part):
                 replace_tags_in_paragraph(p, mapping)
+    for p in iter_textbox_paragraphs(doc):
+        replace_tags_in_paragraph(p, mapping)
 
     out = io.BytesIO()
     doc.save(out)
